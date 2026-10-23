@@ -218,3 +218,12 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Runtime data and local credentials
+data/*
+!data/.gitkeep
+certs/*.key
+certs/*.pem
+certs/*.crt
+certs/*.csr
+*.secret
