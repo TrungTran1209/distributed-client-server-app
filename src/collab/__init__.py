@@ -1,0 +1,1 @@
+"""Collaborative client-server application."""
