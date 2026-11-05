@@ -8,7 +8,6 @@
 
 Các lựa chọn sau là quyết định triển khai của nhóm, không phải những lựa chọn duy nhất mà đề bắt buộc: Python, nhóm ba người, CLI, TCP được bọc TLS, mật khẩu lưu bằng `scrypt`, và UDP discovery/heartbeat. Đề yêu cầu bảo vệ dữ liệu truyền nhưng cho phép lựa chọn giải pháp; nhóm chọn TLS thay cho tự thiết kế mã hóa. Việc lưu mật khẩu bằng `scrypt` là lựa chọn bổ sung của nhóm.
 
-Đề ghi hạn “Sunday, November 17, 2026, at 11:59 PM”. Ngày 17/11/2026 rơi vào thứ Ba, vì vậy cần xác nhận lại thứ/ngày và múi giờ với giảng viên. Kế hoạch nhóm hiện dùng ngày 17/11/2026, 23:59 làm mốc tạm theo ngày số trong đề.
 
 ## Trạng thái tính năng hiện tại
 
