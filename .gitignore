@@ -227,3 +227,10 @@ certs/*.pem
 certs/*.crt
 certs/*.csr
 *.secret
+
+# Local test runners, demo scripts, and run guides
+run_member*
+*HUONG_DAN*
+*RUN_GUIDE*
+scripts/
+requirements.txt
