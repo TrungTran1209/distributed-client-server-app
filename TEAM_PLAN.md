@@ -1,10 +1,8 @@
 # Assignment 1 — Ứng dụng cộng tác Client–Server phân tán
 
-> Kế hoạch triển khai, phân công và tích hợp cho nhóm ba thành viên. Hãy thay `Thành viên 1–3` bằng tên thật của các bạn. Đây là tài liệu làm việc chung; cập nhật khi nhóm thống nhất thay đổi giao diện hoặc phạm vi.
-
 ## 1. Mục tiêu dự án
 
-Xây dựng ứng dụng cộng tác tự lưu trữ, chạy trên localhost hoặc mạng nội bộ, dùng Python và raw sockets. Server tiếp nhận nhiều client đồng thời, xác thực tài khoản, theo dõi người dùng đang trực tuyến và định tuyến tin nhắn broadcast/tin nhắn riêng. Người dùng có thể truyền tệp đáng tin cậy. Client phát hiện server/người dùng qua UDP discovery và heartbeat theo giao thức nhóm thiết kế. Kết nối TCP được bảo vệ bằng TLS; thông tin mật khẩu được lưu dưới dạng dẫn xuất mật khẩu có salt, không lưu mật khẩu gốc.
+Xây dựng ứng dụng cộng tác tự lưu trữ, chạy trên localhost hoặc mạng nội bộ, dùng Python và raw sockets. Server tiếp nhận nhiều client đồng thời, xác thực tài khoản, theo dõi người dùng đang trực tuyến và định tuyến tin nhắn broadcast/tin nhắn riêng. Người dùng có thể truyền tệp đáng tin cậy. Client phát hiện **server** bằng UDP; danh sách người dùng online được server cung cấp qua TCP/TLS sau đăng nhập và cập nhật bằng presence event. Kết nối TCP được bảo vệ bằng TLS; thông tin mật khẩu được lưu dưới dạng dẫn xuất mật khẩu có salt, không lưu mật khẩu gốc.
 
 CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp. CLI cần thể hiện trạng thái kết nối, người dùng trực tuyến, tin nhắn, lỗi và tiến độ truyền tệp.
 
@@ -16,10 +14,11 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 | Kết nối và dữ liệu chính | TCP raw socket; framing ứng dụng tường minh |
 | Discovery/heartbeat | UDP là tính năng bắt buộc trong phạm vi dự án |
 | Bảo vệ kênh mạng | TLS qua thư viện `ssl` của Python trên kết nối TCP; vẫn dùng socket, không dùng HTTP/WebSocket |
-| Mật khẩu | Không lưu plaintext; lưu salt và kết quả dẫn xuất bằng `hashlib.scrypt` hoặc thư viện Argon2 nếu nhóm/giảng viên cho phép cài dependency. Chọn `hashlib.scrypt` làm mặc định để giảm dependency và có sẵn trong Python |
+| Mật khẩu | Đề gốc không quy định KDF hay lưu tài khoản; nhóm chọn không lưu plaintext, dùng `hashlib.scrypt` với salt riêng cho mỗi tài khoản |
 | Người dùng và trạng thái | Server quản lý đăng ký/đăng nhập, phiên hoạt động, IP/cổng TCP và trạng thái online |
 | Giao diện | CLI |
-| Hạn nộp | 17/11/2026 |
+| Hạn nộp tạm theo ngày số trong đề | 16/11/2026, 23:59; |
+
 
 ### Phạm vi bảo mật đã chọn
 
@@ -28,22 +27,24 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 - TLS bảo vệ dữ liệu khi truyền, còn `scrypt` bảo vệ mật khẩu lưu trữ; hai biện pháp giải quyết hai rủi ro khác nhau.
 - Với môi trường demo, chứng chỉ tự ký/CA nội bộ có thể phù hợp. Không tuyên bố hệ thống có quản lý danh tính doanh nghiệp, chống tấn công từ máy chủ bị xâm nhập, hay bảo vệ dữ liệu lưu trên ổ đĩa nếu những phần đó chưa được triển khai.
 
-## 3. Yêu cầu đề bài và tiêu chí hoàn thành
+## 3. Mười mốc chấm trong đề và tình trạng hiện tại
 
-Đề chấm 10 mốc, mỗi mốc 1 điểm:
+Đặc tả gốc chấm 10 mốc, mỗi mốc 1 điểm. Cột nguồn dưới đây diễn giải tiêu chí đề; trạng thái bên cạnh là đánh giá repository hiện tại, không phải kết quả kiểm thử mới trong lần chỉnh tài liệu này.
 
-1. [ ] **Thiết kế giao thức:** định nghĩa packet/message, loại message và sơ đồ trạng thái trước khi code.
-2. [ ] **TCP handshake:** client kết nối và nhận xác nhận từ server.
-3. [ ] **Đồng thời:** server phục vụ nhiều kết nối đồng thời, mục tiêu ít nhất 10–20 client.
-4. [ ] **Xác thực và trạng thái:** đăng ký/đăng nhập theo phạm vi nhóm chốt; server theo dõi user, IP và cổng hoạt động.
-5. [ ] **Định tuyến tin nhắn:** broadcast và unicast đến đúng đối tượng.
-6. [ ] **Truyền tệp đáng tin cậy:** metadata, chia chunk, ghép lại và phát hiện hỏng dữ liệu.
-7. [ ] **Phục hồi và xử lý lỗi:** timeout, broken pipe, ngắt kết nối đột ngột, thoát graceful.
-8. [ ] **Bảo mật:** TLS cho dữ liệu TCP; mật khẩu được dẫn xuất và bảo vệ khi lưu.
-9. [ ] **UI/CLI:** hiển thị người dùng, tin nhắn, trạng thái kết nối và tiến độ tệp.
-10. [ ] **Kiểm thử và chất lượng:** mã rõ ràng, có chú thích phù hợp và mô phỏng mạng nội bộ qua nhiều terminal.
+| # | Mốc trong đặc tả gốc | Trạng thái repo và phần cần làm |
+|---:|---|---|
+| 1 | Thiết lập và thiết kế giao thức: định nghĩa packet, message type, sơ đồ trạng thái trước khi code. | **Có tài liệu**, nhưng lịch sử tài liệu có trước khi code chưa được xác minh ở đây. Cần đảm bảo protocol, state/sequence diagram khớp code và báo cáo. |
+| 2 | TCP handshake: client kết nối và nhận xác nhận từ server. | **Đã có trong code:** client TLS gửi `hello`, server trả `welcome`. Cần chạy demo và lưu kết quả. |
+| 3 | Đồng thời: ít nhất 10–20 client. | **Có worker thread và cấu hình giới hạn 100. Chưa chứng minh tải 10–20 client.** Cần chạy mô phỏng nhiều terminal/client. |
+| 4 | Đăng nhập và quản lý state; server theo dõi user, IP, cổng đang hoạt động. | **Đã có trong code:** đăng ký/đăng nhập, session registry và địa chỉ/cổng TCP nguồn. Cần kiểm thử kết nối thực tế. |
+| 5 | Định tuyến tin nhắn broadcast hoặc chuyển tiếp đến recipient đúng. | **Đã có trong code:** broadcast và direct chat. Cần kiểm chứng trên nhiều client. |
+| 6 | Truyền file tin cậy: serialize, chia chunk file lớn, ghép lại không hỏng. | **Chưa triển khai đầu-cuối:** server trả `server_busy`; module transfer hiện là khung. Đây là thiếu sót lớn nhất so với đề. |
+| 7 | Phục hồi: timeout, broken pipe, client thoát an toàn, server không crash. | **Có một phần xử lý** ở server/client; chưa có bằng chứng mô phỏng các lỗi mạng. Cần kiểm thử timeout, mất kết nối và graceful exit. |
+| 8 | Mã hóa payload bằng thư viện mật mã chuẩn rồi giải mã phía nhận. | **Đã chọn TLS** để bảo vệ toàn bộ luồng TCP; client xác minh chứng chỉ. `scrypt` là quyết định bổ sung để bảo vệ mật khẩu lưu trữ, không thay cho TLS và không phải yêu cầu gốc. Cần kiểm chứng kết nối bằng chứng chỉ hợp lệ/sai. |
+| 9 | UI dễ dùng, hiển thị message, tiến độ file và danh sách user hoạt động. | **CLI hiển thị chat/presence/danh sách user. Tiến độ file chưa thể có** khi server transfer chưa triển khai. |
+| 10 | Code gọn, có chú thích và qua mô phỏng mạng cục bộ từ nhiều terminal. | **Chưa có bằng chứng nộp:** test files hiện có nhưng chưa có kết quả chạy test/mô phỏng và ghi nhận. Cần chạy, sửa lỗi, lưu đúng kết quả thực tế. |
 
-Ngoài các mốc trên, hoàn thành discovery/heartbeat UDP và thể hiện trong demo/tài liệu vì nhóm đã chọn đây là phạm vi bắt buộc.
+Đề cũng nêu UDP cho discovery/heartbeat trong mục công nghệ. Nhóm đã chọn đây là phạm vi bắt buộc; rubric không chấm UDP thành một điểm riêng. Cần thể hiện chức năng và giới hạn trong demo/tài liệu.
 
 ## 4. Cấu trúc repository đề xuất
 
@@ -80,7 +81,7 @@ distributed-collab/
 │       │   ├── user_store.py     # lưu tài khoản, salt và password hash
 │       │   ├── sessions.py       # session và trạng thái online
 │       │   ├── router.py         # broadcast và unicast
-│       │   └── discovery.py      # UDP listener/heartbeat/peer discovery
+│       │   └── discovery.py      # UDP listener, phản hồi tìm server/heartbeat
 │       ├── client/
 │       │   ├── main.py
 │       │   ├── connection.py     # TCP + TLS
@@ -256,7 +257,6 @@ Thống nhất transfer ID, tên tệp an toàn, kích thước khai báo, kích
 
 ## 8. Rủi ro và quyết định cần lưu ý
 
-- **Hạn nộp:** nhóm xác nhận hạn chính thức là **17/11/2026**. Ngày này là thứ Ba; nếu đề ghi thứ khác thì dùng ngày đã được giảng viên xác nhận.
 - **UDP:** discovery/heartbeat UDP thuộc phạm vi bắt buộc của nhóm. Cần demo trên cùng LAN/localhost phù hợp và trình bày rõ giới hạn broadcast/firewall.
 - **Bảo mật:** phương án đã chốt là TLS cho TCP và scrypt cho mật khẩu lưu trữ. Cần cấu hình trust của chứng chỉ đúng; chứng chỉ tự tạo phù hợp demo nhưng không tương đương PKI doanh nghiệp.
 - **Xác thực:** hệ thống có tài khoản được lưu và bảo vệ mật khẩu, nhưng phạm vi vẫn là ứng dụng môn học. Chỉ tuyên bố những bảo vệ đã triển khai và kiểm chứng.
@@ -270,7 +270,18 @@ Thống nhất transfer ID, tên tệp an toàn, kích thước khai báo, kích
 - [ ] `docs/protocol.md` mô tả framing, loại message TCP, schema UDP và các phản hồi lỗi.
 - [ ] `docs/state-diagrams.md` và `docs/sequence-diagrams.md` khớp implementation, gồm đăng nhập, nhắn tin, discovery và truyền tệp.
 - [ ] `docs/security.md` ghi TLS, cách xác minh chứng chỉ, lưu mật khẩu bằng scrypt, quản lý dữ liệu nhạy cảm và giới hạn bảo mật.
-- [ ] Báo cáo PDF có kiến trúc, giao thức, sequence diagram và phản ánh thử thách/cách giải quyết.
+- [ ] Hoàn thiện báo cáo PDF có kiến trúc, giao thức, sequence diagram và phản ánh thử thách/cách giải quyết. File `docs/report/technical-report.pdf` hiện chỉ là trang placeholder, chưa đáp ứng yêu cầu nộp.
 - [ ] Đã mô phỏng mạng nội bộ với nhiều terminal/client và ghi lại kết quả thực tế.
 - [ ] Repository/ZIP không chứa private key, mật khẩu, database runtime hoặc tệp người dùng.
 - [ ] Nhóm kiểm tra hạn nộp 17/11/2026 trên kênh chính thức của môn học.
+
+## 10. Thuật ngữ dùng trong dự án
+
+- **Client–server:** client mở kết nối tới server; server xác thực và điều phối. Trong dự án này chat/file được server chuyển tiếp, không phải kết nối ngang hàng trực tiếp.
+- **Raw socket:** dùng socket TCP/UDP cơ bản để tự xây dựng giao thức ứng dụng; không dùng HTTP framework hay WebSocket.
+- **Framing:** quy tắc đánh dấu ranh giới message trên TCP. Repo dùng 4 byte ghi độ dài, sau đó là JSON payload.
+- **TLS:** lớp bảo vệ kết nối TCP, mã hóa dữ liệu và xác minh server theo chứng chỉ được client tin cậy.
+- **Discovery:** hỏi qua UDP để tìm địa chỉ server. Discovery không đăng nhập và không chứng minh server đáng tin; TLS vẫn phải xác minh sau đó.
+- **Heartbeat:** thông điệp định kỳ để biết đường kết nối còn hoạt động. TCP `ping/pong` giúp giữ phiên ứng dụng; UDP heartbeat hiện chỉ được server xác nhận, không tạo/duy trì session người dùng.
+- **Salt và `scrypt`:** salt ngẫu nhiên riêng cho mỗi tài khoản làm đầu vào cho KDF. `scrypt` tạo giá trị lưu trong database; server so sánh kết quả khi đăng nhập. Đây là bảo vệ dữ liệu lưu, khác với TLS bảo vệ trên đường truyền.
+- **Chunk/checksum:** chia file thành phần nhỏ để gửi; checksum như SHA-256 giúp phát hiện dữ liệu nhận bị thiếu/hỏng. Phần này chưa tích hợp vào server.

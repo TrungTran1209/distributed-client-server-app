@@ -2,6 +2,8 @@
 
 Phiên bản giao thức là `1`. Tài liệu này mô tả hành vi hiện có trong code. Những mục ghi **Chưa triển khai** là phần dự kiến của giao thức, chưa được server xử lý thành công.
 
+Đặc tả bài tập yêu cầu nhóm tự thiết kế packet/message và yêu cầu các chức năng mạng nêu trong rubric; các tên message, JSON, framing 4 byte, TLS, cổng mặc định và trường cụ thể dưới đây là thiết kế hiện thực của nhóm. Đề không bắt buộc phải dùng chính những tên/trường này. Phần transfer là dự kiến, không phải chức năng đã có.
+
 ## 1. Kênh kết nối và framing
 
 - Ứng dụng dùng TCP raw socket được bọc TLS. TLS phải hoàn tất trước message ứng dụng; server và client đặt TLS tối thiểu là 1.2. Client phải xác minh chứng chỉ và hostname theo trust store đã cấu hình.
