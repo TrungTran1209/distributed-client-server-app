@@ -36,13 +36,16 @@ class ClientConnection:
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
         try:
             self.sock = self.tls_context.wrap_socket(raw, server_hostname=self.server_hostname)
+            self.sock.settimeout(self.timeout)
+            req_id = new_request_id()
+            hello = make_message("hello", request_id=req_id, client="collab-cli", client_version="1.0")
+            self.sock.sendall(encode_frame(encode_message(hello)))
+            welcome = decode_message(recv_frame(self.sock))
+            if welcome.get("type") != "welcome" or welcome.get("request_id") != req_id:
+                raise ClientConnectionError("Server did not complete the protocol handshake")
             self.sock.settimeout(None)
             self._reader = threading.Thread(target=self._receive_loop, name="collab-client-receiver", daemon=True)
             self._reader.start()
-            welcome = self.request("hello", timeout=self.timeout,
-                                   client="collab-cli", client_version="1.0")
-            if welcome.get("type") != "welcome":
-                raise ClientConnectionError("Server did not complete the protocol handshake")
             interval = max(5, int(welcome.get("heartbeat_interval_sec", 30)))
             self._keepalive = threading.Thread(target=self._keepalive_loop, args=(interval,),
                                                name="collab-tcp-keepalive", daemon=True)

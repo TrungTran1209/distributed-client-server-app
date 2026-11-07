@@ -27,16 +27,34 @@ def main() -> None:
     parser.add_argument("--ca", default=os.environ.get("COLLAB_TLS_CA_FILE"))
     parser.add_argument("--discover", action="store_true", help="find a server via UDP before connecting")
     parser.add_argument("--broadcast", action="store_true", help="send discovery to the LAN broadcast address")
-    parser.add_argument("--discover-host", default=os.environ.get("COLLAB_DISCOVERY_HOST", "127.0.0.1"),
-                        help="UDP unicast destination for discovery (default: localhost)")
+    parser.add_argument(
+        "--discover-host",
+        default=os.environ.get("COLLAB_DISCOVERY_HOST", "127.0.0.1"),
+        help="UDP unicast destination for discovery (default: localhost)",
+    )
     parser.add_argument("--timeout", type=float, default=1.5, help="UDP discovery timeout in seconds")
+    parser.add_argument(
+        "--download-dir",
+        default=os.environ.get("COLLAB_DOWNLOAD_DIR", "downloads"),
+        help="directory where verified incoming files are saved",
+    )
+    parser.add_argument(
+        "--auto-accept",
+        action="store_true",
+        help="automatically accept valid incoming file offers",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     host, port = args.host, args.port
     if args.discover or not host:
-        announcement = discover_server(udp_port=args.udp_port, broadcast=args.broadcast,
-                                       target_host=args.discover_host, timeout=args.timeout, attempts=2)
+        announcement = discover_server(
+            udp_port=args.udp_port,
+            broadcast=args.broadcast,
+            target_host=args.discover_host,
+            timeout=args.timeout,
+            attempts=2,
+        )
         if announcement:
             host, port = announcement["host"], announcement["tcp_port"]
             print(f"Tìm thấy {announcement['server_name']} tại {host}:{port}")
@@ -49,9 +67,18 @@ def main() -> None:
     try:
         tls_context = create_client_context(_path(args.ca))
         cli: CommandLine
-        connection = ClientConnection(host, port, tls_context,
-                                      on_event=lambda event: cli.show_event(event))
-        cli = CommandLine(connection, output=sys.stdout)
+        connection = ClientConnection(
+            host,
+            port,
+            tls_context,
+            on_event=lambda event: cli.show_event(event),
+        )
+        cli = CommandLine(
+            connection,
+            output=sys.stdout,
+            download_dir=Path(args.download_dir).expanduser(),
+            auto_accept=args.auto_accept,
+        )
         welcome = connection.connect()
         interval = max(5, int(welcome.get("heartbeat_interval_sec", 30)))
         heartbeat = UDPHeartbeat(host, args.udp_port, interval=interval)

@@ -1,3 +1,4 @@
+from contextlib import closing
 import sqlite3
 import tempfile
 import unittest
@@ -72,7 +73,7 @@ class CryptoAndKdfTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             db_path = Path(tmp) / "legacy.sqlite3"
             salt, digest = derive_password("legacy password 123")
-            with sqlite3.connect(db_path) as db:
+            with closing(sqlite3.connect(db_path)) as db, db:
                 db.execute(
                     """CREATE TABLE users (
                         username TEXT PRIMARY KEY COLLATE BINARY,

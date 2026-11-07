@@ -15,6 +15,11 @@ PROTOCOL_VERSION = 1
 MAX_FRAME_SIZE = 1_048_576
 MAX_CHAT_LENGTH = 4_000
 
+DEFAULT_CHUNK_SIZE = 65_536
+MAX_CHUNK_SIZE = 262_144
+MAX_FILE_SIZE = 67_108_864
+MAX_FILENAME_LENGTH = 200
+
 
 class MessageType(StrEnum):
     HELLO = "hello"
@@ -33,13 +38,45 @@ class MessageType(StrEnum):
     CHAT_MESSAGE = "chat_message"
     FILE_OFFER = "file_offer"
     FILE_OFFER_RESULT = "file_offer_result"
+    FILE_ACCEPT = "file_accept"
+    FILE_ACCEPT_RESULT = "file_accept_result"
+    FILE_REJECT = "file_reject"
+    FILE_REJECT_RESULT = "file_reject_result"
     FILE_CHUNK = "file_chunk"
     FILE_CHUNK_RESULT = "file_chunk_result"
     FILE_END = "file_end"
     FILE_RESULT = "file_result"
+    FILE_ACK = "file_ack"
+    FILE_ACK_RESULT = "file_ack_result"
+    FILE_CANCEL = "file_cancel"
+    FILE_CANCEL_RESULT = "file_cancel_result"
+    FILE_OFFER_EVENT = "file_offer_event"
+    FILE_DECISION = "file_decision"
+    FILE_CHUNK_EVENT = "file_chunk_event"
+    FILE_END_EVENT = "file_end_event"
+    FILE_STATUS = "file_status"
     PING = "ping"
     PONG = "pong"
     ERROR = "error"
+
+
+REQUEST_MESSAGE_TYPES = frozenset(
+    {
+        MessageType.HELLO,
+        MessageType.REGISTER,
+        MessageType.LOGIN,
+        MessageType.LOGOUT,
+        MessageType.CHAT_SEND,
+        MessageType.FILE_OFFER,
+        MessageType.FILE_ACCEPT,
+        MessageType.FILE_REJECT,
+        MessageType.FILE_CHUNK,
+        MessageType.FILE_END,
+        MessageType.FILE_ACK,
+        MessageType.FILE_CANCEL,
+        MessageType.PING,
+    }
+)
 
 
 def new_request_id() -> str:
@@ -73,12 +110,7 @@ def validate_message(message: Any) -> None:
     if not isinstance(message.get("type"), str):
         raise ProtocolError("message type is required")
     request_id = message.get("request_id")
-    request_types = {
-        MessageType.HELLO, MessageType.REGISTER, MessageType.LOGIN, MessageType.LOGOUT,
-        MessageType.CHAT_SEND, MessageType.FILE_OFFER, MessageType.FILE_CHUNK,
-        MessageType.FILE_END, MessageType.PING,
-    }
-    if message["type"] in request_types and request_id is None:
+    if message["type"] in REQUEST_MESSAGE_TYPES and request_id is None:
         raise ProtocolError("request_id is required for requests")
     if request_id is not None:
         if not isinstance(request_id, str):
