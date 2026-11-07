@@ -60,6 +60,7 @@ class TransferCoordinator:
         max_file_size: int = MAX_FILE_SIZE,
         max_chunk_size: int = MAX_CHUNK_SIZE,
         max_active_per_user: int = 3,
+        max_total_transfers: int = 64,
     ) -> None:
         self.sessions = sessions
         self.send = send
@@ -69,13 +70,12 @@ class TransferCoordinator:
         self.max_file_size = max_file_size
         self.max_chunk_size = max_chunk_size
         self.max_active_per_user = max_active_per_user
+        self.max_total_transfers = max_total_transfers
         self._lock = threading.RLock()
         self._transfers: dict[str, _RelaySession] = {}
 
     def handle_request(self, session: Session, request: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a file-transfer request and return the correlated response."""
-        kind = request["type"]
-        request_id = request.get("request_id")
         handlers = {
             MessageType.FILE_OFFER: self._handle_offer,
             MessageType.FILE_ACCEPT: self._handle_accept,
@@ -85,10 +85,10 @@ class TransferCoordinator:
             MessageType.FILE_ACK: self._handle_ack,
             MessageType.FILE_CANCEL: self._handle_cancel,
         }
-        handler = handlers.get(kind)
+        handler = handlers.get(request["type"])
         if handler is None:
             raise ProtocolError("Unsupported file transfer message")
-        return handler(session, request, request_id)
+        return handler(session, request, request.get("request_id"))
 
     def on_disconnect(self, username: str) -> None:
         """Abort all active transfers involving `username` and notify surviving peers."""
@@ -125,8 +125,7 @@ class TransferCoordinator:
         expired_items: list[_RelaySession] = []
         with self._lock:
             for tid, rel in list(self._transfers.items()):
-                limit = self._timeout_for_state(rel.state)
-                if now - rel.updated_at > limit:
+                if now - rel.updated_at > self._timeout_for_state(rel.state):
                     expired_items.append(self._transfers.pop(tid))
 
         for rel in expired_items:
@@ -164,46 +163,15 @@ class TransferCoordinator:
             )
         except (ProtocolError, TransferError) as exc:
             code = exc.code if isinstance(exc, TransferError) else "invalid_message"
-            return make_message(
-                MessageType.FILE_OFFER_RESULT,
-                request_id=request_id,
-                ok=False,
-                code=code,
-                message=str(exc),
-            )
+            return _fail(MessageType.FILE_OFFER_RESULT, request_id, code, str(exc))
 
         target = self.sessions.get_user(recipient)
         if target is None or target.username == session.username:
-            return make_message(
-                MessageType.FILE_OFFER_RESULT,
-                request_id=request_id,
-                ok=False,
-                code="recipient_unavailable",
-            )
+            return _fail(MessageType.FILE_OFFER_RESULT, request_id, "recipient_unavailable")
 
-        with self._lock:
-            if manifest.transfer_id in self._transfers:
-                return make_message(
-                    MessageType.FILE_OFFER_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="duplicate_transfer",
-                )
-            sender_active = sum(
-                1 for r in self._transfers.values() if r.sender == session.username
-            )
-            if sender_active >= self.max_active_per_user:
-                return make_message(
-                    MessageType.FILE_OFFER_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="too_many_transfers",
-                )
-            self._transfers[manifest.transfer_id] = _RelaySession(
-                manifest=manifest,
-                sender=session.username,
-                recipient=recipient,
-            )
+        quota_err = self._register_offer(session.username, recipient, manifest)
+        if quota_err is not None:
+            return _fail(MessageType.FILE_OFFER_RESULT, request_id, quota_err)
 
         self.send(
             target,
@@ -226,6 +194,28 @@ class TransferCoordinator:
             transfer_id=manifest.transfer_id,
         )
 
+    def _register_offer(
+        self,
+        sender: str,
+        recipient: str,
+        manifest: TransferManifest,
+    ) -> str | None:
+        with self._lock:
+            if manifest.transfer_id in self._transfers:
+                return "duplicate_transfer"
+            if len(self._transfers) >= self.max_total_transfers:
+                return "server_busy"
+            sender_count = sum(1 for r in self._transfers.values() if r.sender == sender)
+            recipient_count = sum(1 for r in self._transfers.values() if r.recipient == recipient)
+            if sender_count >= self.max_active_per_user or recipient_count >= self.max_active_per_user * 2:
+                return "too_many_transfers"
+            self._transfers[manifest.transfer_id] = _RelaySession(
+                manifest=manifest,
+                sender=sender,
+                recipient=recipient,
+            )
+        return None
+
     def _handle_accept(
         self,
         session: Session,
@@ -238,21 +228,11 @@ class TransferCoordinator:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.recipient != session.username or rel.state != "offered":
-                return make_message(
-                    MessageType.FILE_ACCEPT_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_transfer_state",
-                )
+                return _fail(MessageType.FILE_ACCEPT_RESULT, request_id, "invalid_transfer_state")
             sender_session = self.sessions.get_user(rel.sender)
             if sender_session is None:
                 self._transfers.pop(tid, None)
-                return make_message(
-                    MessageType.FILE_ACCEPT_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="peer_disconnected",
-                )
+                return _fail(MessageType.FILE_ACCEPT_RESULT, request_id, "peer_disconnected")
             rel.state = "accepted"
             rel.updated_at = time.monotonic()
 
@@ -265,12 +245,7 @@ class TransferCoordinator:
                 by=session.username,
             ),
         )
-        return make_message(
-            MessageType.FILE_ACCEPT_RESULT,
-            request_id=request_id,
-            ok=True,
-            transfer_id=tid,
-        )
+        return make_message(MessageType.FILE_ACCEPT_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     def _handle_reject(
         self,
@@ -285,12 +260,7 @@ class TransferCoordinator:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.recipient != session.username or rel.state != "offered":
-                return make_message(
-                    MessageType.FILE_REJECT_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_transfer_state",
-                )
+                return _fail(MessageType.FILE_REJECT_RESULT, request_id, "invalid_transfer_state")
             self._transfers.pop(tid, None)
 
         sender_session = self.sessions.get_user(rel.sender)
@@ -306,12 +276,7 @@ class TransferCoordinator:
                     message=reason,
                 ),
             )
-        return make_message(
-            MessageType.FILE_REJECT_RESULT,
-            request_id=request_id,
-            ok=True,
-            transfer_id=tid,
-        )
+        return make_message(MessageType.FILE_REJECT_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     def _handle_chunk(
         self,
@@ -322,62 +287,18 @@ class TransferCoordinator:
         tid, err = self._parse_tid(request, MessageType.FILE_CHUNK_RESULT, request_id)
         if err is not None:
             return err
-
         index = request.get("index")
         data_b64 = request.get("data")
         if type(index) is not int or not isinstance(data_b64, str):
-            return make_message(
-                MessageType.FILE_CHUNK_RESULT,
-                request_id=request_id,
-                ok=False,
-                code="invalid_chunk",
-            )
+            return _fail(MessageType.FILE_CHUNK_RESULT, request_id, "invalid_chunk")
 
-        with self._lock:
-            rel = self._transfers.get(tid)
-            if rel is None or rel.sender != session.username or rel.state != "accepted":
-                return make_message(
-                    MessageType.FILE_CHUNK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_transfer_state",
-                )
-            if index != rel.next_index or index >= rel.manifest.total_chunks:
-                return make_message(
-                    MessageType.FILE_CHUNK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="chunk_out_of_order",
-                )
-            try:
-                decoded = base64.b64decode(data_b64.encode("ascii"), validate=True)
-            except (ValueError, binascii.Error):
-                return make_message(
-                    MessageType.FILE_CHUNK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_chunk",
-                )
-            if len(decoded) != rel.manifest.expected_chunk_length(index):
-                return make_message(
-                    MessageType.FILE_CHUNK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_chunk",
-                )
-            recipient_session = self.sessions.get_user(rel.recipient)
-            if recipient_session is None:
-                self._transfers.pop(tid, None)
-                return make_message(
-                    MessageType.FILE_CHUNK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="peer_disconnected",
-                )
-            rel.next_index += 1
-            rel.bytes_relayed += len(decoded)
-            rel.updated_at = time.monotonic()
+        recipient_session, chunk_err = self._validate_and_advance_chunk(
+            tid, session.username, index, data_b64
+        )
+        if chunk_err is not None:
+            return _fail(MessageType.FILE_CHUNK_RESULT, request_id, chunk_err)
 
+        assert recipient_session is not None
         self.send(
             recipient_session,
             make_message(
@@ -396,6 +317,34 @@ class TransferCoordinator:
             index=index,
         )
 
+    def _validate_and_advance_chunk(
+        self,
+        tid: str,
+        sender: str,
+        index: int,
+        data_b64: str,
+    ) -> tuple[Session | None, str | None]:
+        with self._lock:
+            rel = self._transfers.get(tid)
+            if rel is None or rel.sender != sender or rel.state != "accepted":
+                return None, "invalid_transfer_state"
+            if index != rel.next_index or index >= rel.manifest.total_chunks:
+                return None, "chunk_out_of_order"
+            try:
+                decoded = base64.b64decode(data_b64.encode("ascii"), validate=True)
+            except (ValueError, binascii.Error):
+                return None, "invalid_chunk"
+            if len(decoded) != rel.manifest.expected_chunk_length(index):
+                return None, "invalid_chunk"
+            recipient_session = self.sessions.get_user(rel.recipient)
+            if recipient_session is None:
+                self._transfers.pop(tid, None)
+                return None, "peer_disconnected"
+            rel.next_index += 1
+            rel.bytes_relayed += len(decoded)
+            rel.updated_at = time.monotonic()
+            return recipient_session, None
+
     def _handle_end(
         self,
         session: Session,
@@ -409,34 +358,25 @@ class TransferCoordinator:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.sender != session.username or rel.state != "accepted":
-                return make_message(
-                    MessageType.FILE_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_transfer_state",
-                )
-            if (
-                rel.next_index != rel.manifest.total_chunks
-                or rel.bytes_relayed != rel.manifest.size
-                or request.get("size") != rel.manifest.size
-                or str(request.get("sha256", "")).lower() != rel.manifest.sha256
-            ):
-                self._transfers.pop(tid, None)
-                return make_message(
-                    MessageType.FILE_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="size_mismatch",
-                )
+                return _fail(MessageType.FILE_RESULT, request_id, "invalid_transfer_state")
             recipient_session = self.sessions.get_user(rel.recipient)
+            is_complete = (
+                rel.next_index == rel.manifest.total_chunks
+                and rel.bytes_relayed == rel.manifest.size
+                and request.get("size") == rel.manifest.size
+                and str(request.get("sha256", "")).lower() == rel.manifest.sha256
+            )
+            if not is_complete:
+                self._transfers.pop(tid, None)
+                if recipient_session is not None:
+                    self.send(
+                        recipient_session,
+                        make_message(MessageType.FILE_STATUS, transfer_id=tid, ok=False, code="size_mismatch"),
+                    )
+                return _fail(MessageType.FILE_RESULT, request_id, "size_mismatch")
             if recipient_session is None:
                 self._transfers.pop(tid, None)
-                return make_message(
-                    MessageType.FILE_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="peer_disconnected",
-                )
+                return _fail(MessageType.FILE_RESULT, request_id, "peer_disconnected")
             rel.state = "verifying"
             rel.updated_at = time.monotonic()
 
@@ -451,13 +391,7 @@ class TransferCoordinator:
                 total_chunks=rel.manifest.total_chunks,
             ),
         )
-        return make_message(
-            MessageType.FILE_RESULT,
-            request_id=request_id,
-            ok=True,
-            transfer_id=tid,
-            stage="verifying",
-        )
+        return make_message(MessageType.FILE_RESULT, request_id=request_id, ok=True, transfer_id=tid, stage="verifying")
 
     def _handle_ack(
         self,
@@ -472,20 +406,11 @@ class TransferCoordinator:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.recipient != session.username or rel.state != "verifying":
-                return make_message(
-                    MessageType.FILE_ACK_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="invalid_transfer_state",
-                )
+                return _fail(MessageType.FILE_ACK_RESULT, request_id, "invalid_transfer_state")
             self._transfers.pop(tid, None)
 
         ok = bool(request.get("ok"))
-        status_fields: dict[str, Any] = {
-            "transfer_id": tid,
-            "ok": ok,
-            "by": session.username,
-        }
+        status_fields: dict[str, Any] = {"transfer_id": tid, "ok": ok, "by": session.username}
         if ok:
             status_fields["sha256"] = rel.manifest.sha256
         else:
@@ -494,13 +419,7 @@ class TransferCoordinator:
         sender_session = self.sessions.get_user(rel.sender)
         if sender_session is not None:
             self.send(sender_session, make_message(MessageType.FILE_STATUS, **status_fields))
-
-        return make_message(
-            MessageType.FILE_ACK_RESULT,
-            request_id=request_id,
-            ok=True,
-            transfer_id=tid,
-        )
+        return make_message(MessageType.FILE_ACK_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     def _handle_cancel(
         self,
@@ -515,12 +434,7 @@ class TransferCoordinator:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or session.username not in {rel.sender, rel.recipient}:
-                return make_message(
-                    MessageType.FILE_CANCEL_RESULT,
-                    request_id=request_id,
-                    ok=False,
-                    code="unknown_transfer",
-                )
+                return _fail(MessageType.FILE_CANCEL_RESULT, request_id, "unknown_transfer")
             self._transfers.pop(tid, None)
 
         peer_name = rel.recipient if session.username == rel.sender else rel.sender
@@ -537,12 +451,7 @@ class TransferCoordinator:
                     message=reason,
                 ),
             )
-        return make_message(
-            MessageType.FILE_CANCEL_RESULT,
-            request_id=request_id,
-            ok=True,
-            transfer_id=tid,
-        )
+        return make_message(MessageType.FILE_CANCEL_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     @staticmethod
     def _parse_tid(
@@ -553,10 +462,16 @@ class TransferCoordinator:
         try:
             return validate_uuid_str(request.get("transfer_id")), None
         except TransferError as exc:
-            return "", make_message(
-                response_type,
-                request_id=request_id,
-                ok=False,
-                code=exc.code,
-                message=str(exc),
-            )
+            return "", _fail(response_type, request_id, exc.code, str(exc))
+
+
+def _fail(
+    response_type: MessageType,
+    request_id: str | None,
+    code: str,
+    message: str | None = None,
+) -> dict[str, Any]:
+    fields: dict[str, Any] = {"request_id": request_id, "ok": False, "code": code}
+    if message:
+        fields["message"] = message
+    return make_message(response_type, **fields)

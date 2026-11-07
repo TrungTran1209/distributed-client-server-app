@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections import OrderedDict
 from dataclasses import dataclass, field
 import hashlib
 from pathlib import Path
@@ -21,6 +22,8 @@ from .manifest import TransferManifest, TransferProgress
 RequestFn = Callable[..., dict[str, Any]]
 ProgressCallback = Callable[[TransferProgress], None]
 CompleteCallback = Callable[[str, bool, dict[str, Any]], None]
+
+_MAX_COMPLETED_HISTORY = 256
 
 
 @dataclass
@@ -62,7 +65,7 @@ class FileSender:
         self.on_complete = on_complete
         self._lock = threading.RLock()
         self._active: dict[str, _OutgoingTransfer] = {}
-        self._completed: dict[str, dict[str, Any]] = {}
+        self._completed: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def start_send(self, file_path: str | Path, recipient: str) -> TransferManifest:
         """Validate file, send `file_offer`, and launch background streaming worker."""
@@ -128,7 +131,8 @@ class FileSender:
         wait_sec = timeout if timeout is not None else (self.offer_timeout + self.ack_timeout + 30.0)
         if not state.done_event.wait(wait_sec):
             return {"ok": False, "transfer_id": transfer_id, "code": "transfer_timeout"}
-        return dict(state.outcome or {"ok": False, "transfer_id": transfer_id, "code": "aborted"})
+        with self._lock:
+            return dict(state.outcome or {"ok": False, "transfer_id": transfer_id, "code": "aborted"})
 
     def handle_event(self, message: dict[str, Any]) -> bool:
         """Process server push events correlated to outgoing transfers."""
@@ -138,64 +142,54 @@ class FileSender:
             return False
         with self._lock:
             state = self._active.get(tid)
-        if state is None:
-            return kind in {MessageType.FILE_DECISION, MessageType.FILE_STATUS}
-
-        if kind == MessageType.FILE_DECISION:
-            state.decision = dict(message)
-            state.decision_event.set()
-            return True
-        if kind == MessageType.FILE_STATUS:
-            state.final_status = dict(message)
-            state.status_event.set()
-            if not message.get("ok", False):
-                state.cancelled.set()
+            if state is None:
+                return kind in {MessageType.FILE_DECISION, MessageType.FILE_STATUS}
+            if kind == MessageType.FILE_DECISION:
+                state.decision = dict(message)
                 state.decision_event.set()
-            return True
+                return True
+            if kind == MessageType.FILE_STATUS:
+                state.final_status = dict(message)
+                if not message.get("ok", False):
+                    state.cancelled.set()
+                    state.decision_event.set()
+                state.status_event.set()
+                return True
         return False
 
     def cancel(self, transfer_id_or_prefix: str | None = None) -> str:
         """Cancel an outgoing transfer and notify the server."""
-        state = self._match_active(transfer_id_or_prefix)
-        tid = state.manifest.transfer_id
-        state.cancelled.set()
-        state.final_status = {"ok": False, "transfer_id": tid, "code": "cancelled"}
-        state.decision_event.set()
-        state.status_event.set()
-        try:
-            self._request(
-                MessageType.FILE_CANCEL,
-                timeout=5.0,
-                transfer_id=tid,
-                reason="cancelled_by_sender",
-            )
-        except Exception:  # noqa: BLE001
-            pass
+        with self._lock:
+            state = self._match_active(transfer_id_or_prefix)
+            tid = state.manifest.transfer_id
+            state.final_status = {"ok": False, "transfer_id": tid, "code": "cancelled"}
+            state.cancelled.set()
+            state.decision_event.set()
+            state.status_event.set()
+        self._best_effort_cancel(tid, "cancelled_by_sender")
         return tid
 
     def abort_all(self, reason: str = "connection_lost") -> None:
         """Unblock all active outgoing transfers when connection drops."""
         with self._lock:
-            items = list(self._active.values())
-        for state in items:
-            state.cancelled.set()
-            state.final_status = {
-                "ok": False,
-                "transfer_id": state.manifest.transfer_id,
-                "code": reason,
-            }
-            state.decision_event.set()
-            state.status_event.set()
+            for state in self._active.values():
+                state.final_status = {
+                    "ok": False,
+                    "transfer_id": state.manifest.transfer_id,
+                    "code": reason,
+                }
+                state.cancelled.set()
+                state.decision_event.set()
+                state.status_event.set()
 
     def _match_active(self, prefix: str | None) -> _OutgoingTransfer:
-        with self._lock:
-            if not self._active:
-                raise TransferError("unknown_transfer", "No active outgoing transfer")
-            if not prefix:
-                if len(self._active) == 1:
-                    return next(iter(self._active.values()))
-                raise TransferError("ambiguous_transfer", "Specify transfer ID prefix")
-            matches = [s for tid, s in self._active.items() if tid.startswith(prefix)]
+        if not self._active:
+            raise TransferError("unknown_transfer", "No active outgoing transfer")
+        if not prefix:
+            if len(self._active) == 1:
+                return next(iter(self._active.values()))
+            raise TransferError("ambiguous_transfer", "Specify transfer ID prefix")
+        matches = [s for tid, s in self._active.items() if tid.startswith(prefix)]
         if len(matches) != 1:
             raise TransferError("unknown_transfer", f"No unique transfer matching '{prefix}'")
         return matches[0]
@@ -215,8 +209,8 @@ class FileSender:
             self._best_effort_cancel(tid, "offer_timeout")
             return {"ok": False, "transfer_id": tid, "code": "transfer_timeout"}
 
-        if state.cancelled.is_set() and state.final_status:
-            return dict(state.final_status)
+        if state.cancelled.is_set():
+            return dict(state.final_status or {"ok": False, "transfer_id": tid, "code": "cancelled"})
 
         decision = state.decision or {}
         if not decision.get("accepted"):
@@ -228,8 +222,8 @@ class FileSender:
             }
 
         self._send_all_chunks(state)
-        if state.cancelled.is_set() and state.final_status:
-            return dict(state.final_status)
+        if state.cancelled.is_set():
+            return dict(state.final_status or {"ok": False, "transfer_id": tid, "code": "cancelled"})
 
         end_resp = self._request(
             MessageType.FILE_END,
@@ -264,18 +258,16 @@ class FileSender:
                 if state.cancelled.is_set():
                     return
                 raw = handle.read(manifest.chunk_size)
-                expected_len = manifest.expected_chunk_length(index)
-                if len(raw) != expected_len:
+                if len(raw) != manifest.expected_chunk_length(index):
                     self._best_effort_cancel(manifest.transfer_id, "source_modified")
                     raise TransferError("source_modified", "Source file changed during transfer")
                 hasher.update(raw)
-                encoded = base64.b64encode(raw).decode("ascii")
                 resp = self._request(
                     MessageType.FILE_CHUNK,
                     timeout=self.chunk_timeout,
                     transfer_id=manifest.transfer_id,
                     index=index,
-                    data=encoded,
+                    data=base64.b64encode(raw).decode("ascii"),
                 )
                 if not resp.get("ok"):
                     raise TransferError(
@@ -323,10 +315,12 @@ class FileSender:
 
     def _finish(self, state: _OutgoingTransfer, outcome: dict[str, Any]) -> None:
         tid = state.manifest.transfer_id
-        state.outcome = outcome
         with self._lock:
+            state.outcome = outcome
             self._active.pop(tid, None)
             self._completed[tid] = outcome
+            while len(self._completed) > _MAX_COMPLETED_HISTORY:
+                self._completed.popitem(last=False)
         state.done_event.set()
         if self.on_complete is not None:
             self.on_complete(tid, bool(outcome.get("ok")), outcome)

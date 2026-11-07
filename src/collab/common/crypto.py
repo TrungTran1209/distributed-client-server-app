@@ -9,6 +9,7 @@ import os
 
 KDF_SCHEME = "scrypt"
 CURRENT_KDF_VERSION = 1
+MAX_SCRYPT_MEMORY = 268_435_456  # 256 MiB safe ceiling across 64-bit platforms
 
 
 @dataclass(frozen=True)
@@ -29,17 +30,19 @@ class ScryptParams:
                 raise ValueError(f"{field_name} must be an integer")
         if self.version < 1:
             raise ValueError("KDF version must be >= 1")
-        if self.n < 2 or (self.n & (self.n - 1)) != 0 or self.n > 2**20:
-            raise ValueError("scrypt n must be a power of two between 2 and 2^20")
-        if not 1 <= self.r <= 32:
-            raise ValueError("scrypt r must be between 1 and 32")
-        if not 1 <= self.p <= 16:
-            raise ValueError("scrypt p must be between 1 and 16")
+        if self.n < 2 or (self.n & (self.n - 1)) != 0 or self.n > 2**17:
+            raise ValueError("scrypt n must be a power of two between 2 and 2^17")
+        if not 1 <= self.r <= 16:
+            raise ValueError("scrypt r must be between 1 and 16")
+        if not 1 <= self.p <= 8:
+            raise ValueError("scrypt p must be between 1 and 8")
         if not 16 <= self.dklen <= 64:
             raise ValueError("scrypt dklen must be between 16 and 64 bytes")
         if not 16 <= self.salt_len <= 64:
             raise ValueError("scrypt salt_len must be between 16 and 64 bytes")
         required_mem = 128 * self.n * self.r + 1_048_576
+        if required_mem > MAX_SCRYPT_MEMORY or self.maxmem > MAX_SCRYPT_MEMORY:
+            raise ValueError("scrypt memory parameters exceed 256 MiB safety limit")
         if self.maxmem < required_mem:
             object.__setattr__(self, "maxmem", required_mem)
 
@@ -64,7 +67,7 @@ class ScryptParams:
             if "=" not in item:
                 raise ValueError("Malformed KDF parameter entry")
             key, raw_val = item.split("=", 1)
-            if key != expected_key or not raw_val.isdigit():
+            if key != expected_key or not (raw_val.isascii() and raw_val.isdigit()):
                 raise ValueError(f"Invalid KDF parameter '{key}'")
             parsed[key] = int(raw_val)
         return cls(

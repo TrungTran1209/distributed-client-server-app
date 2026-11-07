@@ -7,10 +7,19 @@ from pathlib import Path
 import shlex
 import threading
 from typing import TextIO
+import unicodedata
 
 from collab.common.errors import ProtocolError, TransferError
 from collab.transfer import FileReceiver, FileSender, TransferManifest, TransferProgress
 from .connection import ClientConnection, ClientConnectionError
+
+
+def _clean_display(value: object) -> str:
+    """Strip terminal control characters from untrusted network text."""
+    text = str(value) if value is not None else ""
+    return "".join(
+        ch for ch in text if ch in {"\t"} or not unicodedata.category(ch).startswith("C")
+    )
 
 
 class CommandLine:
@@ -46,14 +55,26 @@ class CommandLine:
         if self.file_sender.handle_event(message) or self.file_receiver.handle_event(message):
             return
         kind = message.get("type")
+        if kind == "connection_lost":
+            self.file_sender.abort_all("connection_lost")
+            self.file_receiver.abort_all("connection_lost")
+            reason = _clean_display(message.get("reason", "Server đã đóng kết nối."))
+            self._println(f"\n[Mất kết nối] {reason}")
+            self.running = False
+            return
+
         with self._print_lock:
             if kind == "user_list":
-                users = message.get("users", [])
-                self.users = list(users)
-                names = ", ".join(f"{u['username']} ({u['host']}:{u['port']})" for u in users)
+                raw_users = message.get("users")
+                users = [u for u in raw_users if isinstance(u, dict)] if isinstance(raw_users, list) else []
+                self.users = users
+                names = ", ".join(
+                    f"{_clean_display(u.get('username'))} ({_clean_display(u.get('host'))}:{_clean_display(u.get('port'))})"
+                    for u in users
+                )
                 print(f"[online] {names or 'không có ai'}", file=self.output, flush=True)
             elif kind in {"presence_online", "presence_offline"}:
-                username = message.get("username")
+                username = _clean_display(message.get("username"))
                 if kind == "presence_online" and not any(u.get("username") == username for u in self.users):
                     self.users = [*self.users, {"username": username, "host": "?", "port": "?"}]
                 elif kind == "presence_offline":
@@ -62,37 +83,26 @@ class CommandLine:
                 print(f"[{username}] {verb}", file=self.output, flush=True)
             elif kind == "chat_message":
                 recipient = "broadcast" if message.get("to") is None else "tin nhắn riêng"
-                print(
-                    f"\n[{recipient}] {message.get('from')}: {message.get('text')}",
-                    file=self.output,
-                    flush=True,
-                )
-            elif kind == "connection_lost":
-                self.file_sender.abort_all("connection_lost")
-                self.file_receiver.abort_all("connection_lost")
-                print(
-                    f"\n[Mất kết nối] {message.get('reason', 'Server đã đóng kết nối.')}",
-                    file=self.output,
-                    flush=True,
-                )
-                self.running = False
+                sender = _clean_display(message.get("from"))
+                body = _clean_display(message.get("text"))
+                print(f"\n[{recipient}] {sender}: {body}", file=self.output, flush=True)
 
     def run(self) -> None:
-        print("Đã kết nối TLS. Gõ /help để xem lệnh.", file=self.output)
+        self._println("Đã kết nối TLS. Gõ /help để xem lệnh.")
         while self.running and self.connection.connected:
             try:
                 line = self.input_fn("collab> ")
             except (EOFError, KeyboardInterrupt):
-                print(file=self.output)
+                self._println("")
                 break
             try:
                 self.execute(line)
-            except (ClientConnectionError, TimeoutError, OSError) as exc:
-                print(f"Lỗi kết nối: {exc}", file=self.output, flush=True)
+            except (ClientConnectionError, TimeoutError) as exc:
+                self._println(f"Lỗi kết nối: {exc}")
                 if not self.connection.connected:
                     break
-            except (ValueError, TransferError, ProtocolError) as exc:
-                print(f"Lỗi lệnh: {exc}", file=self.output, flush=True)
+            except (ValueError, TransferError, ProtocolError, OSError) as exc:
+                self._println(f"Lỗi lệnh: {exc}")
         self.file_sender.abort_all("client_closed")
         self.file_receiver.abort_all("client_closed")
         self.connection.close()
@@ -103,68 +113,72 @@ class CommandLine:
             return
         command, args = parts[0].lower(), parts[1:]
         if command in {"/help", "help"}:
-            print(
+            self._println(
                 "/register USER  /login USER  /users  /all TEXT  /msg USER TEXT  "
-                "/file PATH USER  /accept [ID]  /reject [ID]  /cancel [ID]  /quit",
-                file=self.output,
+                "/file PATH USER  /accept [ID]  /reject [ID]  /cancel [ID]  /quit"
             )
-        elif command == "/register":
-            username = self._one_arg(command, args)
-            password = getpass.getpass("Mật khẩu (tối thiểu 8 ký tự): ")
-            result = self.connection.request("register", username=username, password=password)
-            msg = "Đăng ký thành công." if result.get("ok") else f"Đăng ký thất bại: {result.get('code')}"
-            self._println(msg)
-        elif command == "/login":
-            username = self._one_arg(command, args)
-            password = getpass.getpass("Mật khẩu: ")
-            result = self.connection.request("login", username=username, password=password)
-            msg = (
-                f"Đăng nhập thành công: {result.get('username')}"
-                if result.get("ok")
-                else f"Đăng nhập thất bại: {result.get('code')}"
-            )
-            self._println(msg)
-        elif command == "/users":
-            self._no_args(command, args)
-            if not self.users:
-                self._println("Chưa có danh sách; hãy đăng nhập để nhận danh sách user online.")
-            else:
-                self._println(", ".join(u["username"] for u in self.users))
-        elif command == "/all":
-            text = self._text_arg(command, args)
-            result = self.connection.request("chat_send", to=None, text=text)
-            self._chat_result(result)
-        elif command == "/msg":
-            if len(args) < 2:
-                raise ValueError("dùng /msg USER NỘI_DUNG")
-            result = self.connection.request("chat_send", to=args[0], text=" ".join(args[1:]))
-            self._chat_result(result)
-        elif command == "/file":
-            if len(args) != 2:
-                raise ValueError("dùng /file ĐƯỜNG_DẪN USER")
-            manifest = self.file_sender.start_send(args[0], args[1])
-            self._println(
-                f"[file] Đã gửi lời mời '{manifest.filename}' ({manifest.size} bytes, "
-                f"id: {manifest.transfer_id[:8]}) tới {args[1]} — đang chờ phản hồi..."
-            )
-        elif command == "/accept":
-            prefix = self._optional_id(command, args)
-            manifest = self.file_receiver.accept(prefix)
-            self._println(
-                f"[file] Đã chấp nhận '{manifest.filename}' (id: {manifest.transfer_id[:8]}). Đang nhận tệp..."
-            )
-        elif command == "/reject":
-            prefix = self._optional_id(command, args)
-            manifest = self.file_receiver.reject(prefix)
-            self._println(f"[file] Đã từ chối '{manifest.filename}' (id: {manifest.transfer_id[:8]}).")
-        elif command == "/cancel":
-            prefix = self._optional_id(command, args)
-            tid = self._cancel_any(prefix)
-            self._println(f"[file] Đã hủy phiên truyền {tid[:8]}.")
+        elif command in {"/register", "/login"}:
+            self._exec_auth(command, args)
+        elif command in {"/users", "/all", "/msg"}:
+            self._exec_chat(command, args)
+        elif command in {"/file", "/accept", "/reject", "/cancel"}:
+            self._exec_transfer(command, args)
         elif command in {"/quit", "/exit"}:
             self.running = False
         else:
             raise ValueError(f"không biết {command}; gõ /help")
+
+    def _exec_auth(self, command: str, args: list[str]) -> None:
+        username = self._one_arg(command, args)
+        if command == "/register":
+            password = getpass.getpass("Mật khẩu (tối thiểu 8 ký tự): ")
+            result = self.connection.request("register", username=username, password=password)
+            self._println("Đăng ký thành công." if result.get("ok") else f"Đăng ký thất bại: {result.get('code')}")
+        else:
+            password = getpass.getpass("Mật khẩu: ")
+            result = self.connection.request("login", username=username, password=password)
+            self._println(
+                f"Đăng nhập thành công: {_clean_display(result.get('username'))}"
+                if result.get("ok")
+                else f"Đăng nhập thất bại: {result.get('code')}"
+            )
+
+    def _exec_chat(self, command: str, args: list[str]) -> None:
+        if command == "/users":
+            self._no_args(command, args)
+            if not self.users:
+                self._println("Chưa có danh sách; hãy đăng nhập để nhận danh sách user online.")
+            else:
+                self._println(", ".join(_clean_display(u.get("username")) for u in self.users))
+        elif command == "/all":
+            text = self._text_arg(command, args)
+            self._chat_result(self.connection.request("chat_send", to=None, text=text))
+        else:
+            if len(args) < 2:
+                raise ValueError("dùng /msg USER NỘI_DUNG")
+            self._chat_result(self.connection.request("chat_send", to=args[0], text=" ".join(args[1:])))
+
+    def _exec_transfer(self, command: str, args: list[str]) -> None:
+        if command == "/file":
+            if len(args) != 2:
+                raise ValueError("dùng /file ĐƯỜNG_DẪN USER")
+            manifest = self.file_sender.start_send(args[0], args[1])
+            self._println(
+                f"[file] Đã gửi lời mời '{_clean_display(manifest.filename)}' ({manifest.size} bytes, "
+                f"id: {manifest.transfer_id[:8]}) tới {_clean_display(args[1])} — đang chờ phản hồi..."
+            )
+        elif command == "/accept":
+            manifest = self.file_receiver.accept(self._optional_id(command, args))
+            self._println(
+                f"[file] Đã chấp nhận '{_clean_display(manifest.filename)}' "
+                f"(id: {manifest.transfer_id[:8]}). Đang nhận tệp..."
+            )
+        elif command == "/reject":
+            manifest = self.file_receiver.reject(self._optional_id(command, args))
+            self._println(f"[file] Đã từ chối '{_clean_display(manifest.filename)}' (id: {manifest.transfer_id[:8]}).")
+        else:
+            tid = self._cancel_any(self._optional_id(command, args))
+            self._println(f"[file] Đã hủy phiên truyền {tid[:8]}.")
 
     def _cancel_any(self, prefix: str | None) -> str:
         try:
@@ -174,13 +188,13 @@ class CommandLine:
 
     def _on_file_offer(self, manifest: TransferManifest, sender: str) -> None:
         short_id = manifest.transfer_id[:8]
+        fname = _clean_display(manifest.filename)
+        who = _clean_display(sender)
         if self.file_receiver.auto_accept:
-            self._println(
-                f"\n[file] {sender} gửi '{manifest.filename}' ({manifest.size} bytes, id: {short_id}) — tự động nhận..."
-            )
+            self._println(f"\n[file] {who} gửi '{fname}' ({manifest.size} bytes, id: {short_id}) — tự động nhận...")
         else:
             self._println(
-                f"\n[file] {sender} muốn gửi '{manifest.filename}' ({manifest.size} bytes, "
+                f"\n[file] {who} muốn gửi '{fname}' ({manifest.size} bytes, "
                 f"{manifest.total_chunks} chunks, id: {short_id}). "
                 f"Gõ /accept {short_id} hoặc /reject {short_id}."
             )
@@ -188,7 +202,7 @@ class CommandLine:
     def _on_progress(self, progress: TransferProgress) -> None:
         action = "Đang gửi" if progress.direction == "send" else "Đang nhận"
         self._println(
-            f"[file {progress.transfer_id[:8]}] {action} '{progress.filename}': "
+            f"[file {progress.transfer_id[:8]}] {action} '{_clean_display(progress.filename)}': "
             f"{progress.percent:.1f}% ({progress.bytes_done}/{progress.total_bytes} bytes)"
         )
 
@@ -197,17 +211,19 @@ class CommandLine:
         if ok:
             self._println(f"\n[file {short_id}] Gửi tệp hoàn tất và đã xác minh SHA-256 thành công.")
         else:
-            self._println(f"\n[file {short_id}] Gửi tệp không thành công: {detail.get('code', 'failed')}")
+            self._println(f"\n[file {short_id}] Gửi tệp không thành công: {_clean_display(detail.get('code', 'failed'))}")
 
     def _on_receive_complete(self, transfer_id: str, ok: bool, detail: dict) -> None:
         short_id = transfer_id[:8]
         if ok:
             self._println(
-                f"\n[file {short_id}] Đã nhận thành công '{detail.get('filename')}' -> {detail.get('path')} "
-                f"(SHA-256 khớp)."
+                f"\n[file {short_id}] Đã nhận thành công '{_clean_display(detail.get('filename'))}' -> "
+                f"{_clean_display(detail.get('path'))} (SHA-256 khớp)."
             )
         else:
-            self._println(f"\n[file {short_id}] Nhận tệp thất bại (đã xóa tệp tạm): {detail.get('code', 'failed')}")
+            self._println(
+                f"\n[file {short_id}] Nhận tệp thất bại (đã xóa tệp tạm): {_clean_display(detail.get('code', 'failed'))}"
+            )
 
     def _println(self, text: str) -> None:
         with self._print_lock:

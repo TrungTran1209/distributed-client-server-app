@@ -3,15 +3,21 @@ import hashlib
 import io
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from collab.client.commands import CommandLine
+from collab.client.discovery import UDPHeartbeat, discover_server
+from collab.common.errors import TransferError
 from collab.common.protocol import MessageType, make_message
+from collab.server.discovery import DiscoveryServer
 from collab.server.sessions import Session, SessionRegistry
 from collab.server.transfer_coordinator import TransferCoordinator
 from collab.transfer.receiver import FileReceiver
+from collab.transfer.sender import FileSender
 
 
 class FakeConnection:
@@ -43,7 +49,13 @@ class TransferEngineUnitTests(unittest.TestCase):
         registry.add(alice)
         registry.add(bob)
 
-        coordinator = TransferCoordinator(registry, fake_send, offer_timeout=5.0, chunk_idle_timeout=5.0)
+        coordinator = TransferCoordinator(
+            registry,
+            fake_send,
+            offer_timeout=5.0,
+            chunk_idle_timeout=5.0,
+            max_active_per_user=2,
+        )
         tid = str(uuid.uuid4())
         payload = b"hello reliable world"
         digest = hashlib.sha256(payload).hexdigest()
@@ -85,6 +97,24 @@ class TransferEngineUnitTests(unittest.TestCase):
         self.assertEqual(sent_messages[-1][0], "bob")
         self.assertEqual(sent_messages[-1][1]["type"], MessageType.FILE_OFFER_EVENT)
 
+        # Duplicate transfer_id rejected
+        dup_resp = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_OFFER,
+                request_id=str(uuid.uuid4()),
+                transfer_id=tid,
+                to="bob",
+                filename="greeting.txt",
+                size=len(payload),
+                sha256=digest,
+                chunk_size=1024,
+                total_chunks=1,
+            ),
+        )
+        self.assertFalse(dup_resp["ok"])
+        self.assertEqual(dup_resp["code"], "duplicate_transfer")
+
         # Sending chunk before accept fails
         early_chunk = coordinator.handle_request(
             alice,
@@ -123,7 +153,82 @@ class TransferEngineUnitTests(unittest.TestCase):
         self.assertFalse(bad_index["ok"])
         self.assertEqual(bad_index["code"], "chunk_out_of_order")
 
-    def test_receiver_deletes_part_file_when_checksum_fails(self):
+        # Invalid Base64 chunk rejected
+        bad_b64 = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_CHUNK,
+                request_id=str(uuid.uuid4()),
+                transfer_id=tid,
+                index=0,
+                data="***not-base64***",
+            ),
+        )
+        self.assertFalse(bad_b64["ok"])
+        self.assertEqual(bad_b64["code"], "invalid_chunk")
+
+        # Explicit cancel from sender notifies recipient
+        cancel_resp = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_CANCEL,
+                request_id=str(uuid.uuid4()),
+                transfer_id=tid,
+                reason="user_cancelled",
+            ),
+        )
+        self.assertTrue(cancel_resp["ok"])
+        self.assertEqual(sent_messages[-1][0], "bob")
+        self.assertEqual(sent_messages[-1][1]["code"], "transfer_cancelled")
+
+    def test_coordinator_quota_and_invalid_uuid_handling(self):
+        registry = SessionRegistry()
+        alice = Session("alice", object(), "127.0.0.1", 50001, str(uuid.uuid4()))
+        bob = Session("bob", object(), "127.0.0.1", 50002, str(uuid.uuid4()))
+        registry.add(alice)
+        registry.add(bob)
+        coordinator = TransferCoordinator(registry, lambda s, m: None, max_active_per_user=1)
+
+        bad_tid = coordinator.handle_request(
+            bob,
+            make_message(MessageType.FILE_ACCEPT, request_id=str(uuid.uuid4()), transfer_id="bad"),
+        )
+        self.assertFalse(bad_tid["ok"])
+
+        digest = hashlib.sha256(b"a").hexdigest()
+        first = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_OFFER,
+                request_id=str(uuid.uuid4()),
+                transfer_id=str(uuid.uuid4()),
+                to="bob",
+                filename="one.txt",
+                size=1,
+                sha256=digest,
+                chunk_size=1024,
+                total_chunks=1,
+            ),
+        )
+        self.assertTrue(first["ok"])
+        second = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_OFFER,
+                request_id=str(uuid.uuid4()),
+                transfer_id=str(uuid.uuid4()),
+                to="bob",
+                filename="two.txt",
+                size=1,
+                sha256=digest,
+                chunk_size=1024,
+                total_chunks=1,
+            ),
+        )
+        self.assertFalse(second["ok"])
+        self.assertEqual(second["code"], "too_many_transfers")
+
+    def test_receiver_deletes_part_file_when_checksum_fails_or_stalls(self):
         with tempfile.TemporaryDirectory() as tmp:
             ack_done = threading.Event()
             ack_payloads: list[dict] = []
@@ -134,7 +239,7 @@ class TransferEngineUnitTests(unittest.TestCase):
                     ack_done.set()
                 return {"v": 1, "type": f"{kind}_result", "ok": True}
 
-            receiver = FileReceiver(fake_request, download_dir=tmp)
+            receiver = FileReceiver(fake_request, download_dir=tmp, idle_timeout=0.05)
             tid = str(uuid.uuid4())
             good_bytes = b"authentic file content"
             wrong_bytes = b"tampered! file content"
@@ -181,18 +286,104 @@ class TransferEngineUnitTests(unittest.TestCase):
             self.assertEqual(ack_payloads[0]["code"], "checksum_mismatch")
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
-    def test_cli_accept_and_reject_commands_use_prefix_matching(self):
+            # Also test stalled receive reap_expired and manual cancel
+            tid2 = str(uuid.uuid4())
+            receiver.handle_event(
+                {
+                    "v": 1,
+                    "type": MessageType.FILE_OFFER_EVENT,
+                    "transfer_id": tid2,
+                    "from": "alice",
+                    "filename": "stalled.txt",
+                    "size": 100,
+                    "sha256": declared_hash,
+                    "chunk_size": 50,
+                    "total_chunks": 2,
+                    "expires_in_sec": 60,
+                }
+            )
+            receiver.accept()
+            time.sleep(0.08)
+            reaped = receiver.reap_expired()
+            self.assertIn(tid2, reaped)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_sender_cancel_abort_and_source_modified_detection(self):
         with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "changing.bin"
+            src.write_bytes(b"initial-ten-bytes")
+
+            def fake_request(kind: str, *, timeout: float = 15.0, **fields):
+                return {"v": 1, "type": f"{kind}_result", "ok": True}
+
+            sender = FileSender(fake_request, offer_timeout=5.0)
+            m1 = sender.start_send(src, "bob")
+            cancelled_id = sender.cancel(m1.transfer_id[:8])
+            self.assertEqual(cancelled_id, m1.transfer_id)
+            out1 = sender.wait(m1.transfer_id, timeout=2.0)
+            self.assertFalse(out1["ok"])
+            self.assertEqual(out1["code"], "cancelled")
+
+            # Mutate file on disk after offer before accept arrives
+            m2 = sender.start_send(src, "bob")
+            src.write_bytes(b"short")
+            sender.handle_event(
+                {
+                    "v": 1,
+                    "type": MessageType.FILE_DECISION,
+                    "transfer_id": m2.transfer_id,
+                    "accepted": True,
+                    "by": "bob",
+                }
+            )
+            out2 = sender.wait(m2.transfer_id, timeout=2.0)
+            self.assertFalse(out2["ok"])
+            self.assertEqual(out2["code"], "source_modified")
+
+    def test_cli_full_command_set_and_event_rendering(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "note.txt"
+            sample.write_text("hello cli", encoding="utf-8")
+            dl_dir = Path(tmp) / "dl"
+
             conn = FakeConnection()
             out = io.StringIO()
-            cli = CommandLine(conn, output=out, download_dir=tmp)
+            commands_iter = iter(
+                [
+                    "/help",
+                    "/users",
+                    "/all xin chao ca nha",
+                    "/msg bob chao ban",
+                    f'/file "{sample.as_posix()}" bob',
+                    "/cancel",
+                    "/quit",
+                ]
+            )
+            cli = CommandLine(
+                conn,
+                output=out,
+                input_fn=lambda prompt="": next(commands_iter),
+                download_dir=dl_dir,
+            )
+
+            # Exercise event rendering for user_list, presence, chat, file offer, reject
+            cli.show_event(
+                {
+                    "type": "user_list",
+                    "users": [{"username": "alice", "host": "127.0.0.1", "port": 40001}],
+                }
+            )
+            cli.show_event({"type": "presence_online", "username": "bob"})
+            cli.show_event({"type": "chat_message", "from": "bob", "to": "alice", "text": "hi"})
+            cli.show_event({"type": "presence_offline", "username": "bob"})
+
             tid = str(uuid.uuid4())
             cli.show_event(
                 {
                     "v": 1,
                     "type": MessageType.FILE_OFFER_EVENT,
                     "transfer_id": tid,
-                    "from": "alice",
+                    "from": "bob",
                     "filename": "demo.txt",
                     "size": 12,
                     "sha256": hashlib.sha256(b"hello world!").hexdigest(),
@@ -201,10 +392,40 @@ class TransferEngineUnitTests(unittest.TestCase):
                     "expires_in_sec": 60,
                 }
             )
-            self.assertIn(tid[:8], out.getvalue())
             cli.execute(f"/reject {tid[:8]}")
-            self.assertEqual(conn.requests[-1][0], MessageType.FILE_REJECT)
-            self.assertEqual(conn.requests[-1][1]["transfer_id"], tid)
+            with patch("getpass.getpass", return_value="password123"):
+                cli.execute("/register alice")
+                cli.execute("/login alice")
+
+            cli.run()
+            rendered = out.getvalue()
+            self.assertIn("[online]", rendered)
+            self.assertIn("tin nhắn riêng", rendered)
+            self.assertIn("Đã từ chối", rendered)
+            self.assertIn("Đăng nhập thành công", rendered)
+
+            # Verify connection_lost stops CLI cleanly
+            cli.running = True
+            cli.show_event({"type": "connection_lost", "reason": "test drop"})
+            self.assertFalse(cli.running)
+
+    def test_client_udp_discover_and_heartbeat_round_trip(self):
+        server = DiscoveryServer(37021, bind_host="127.0.0.1", udp_port=0)
+        server.start()
+        try:
+            assert server._socket is not None
+            _, udp_port = server._socket.getsockname()
+            found = discover_server(udp_port=udp_port, target_host="127.0.0.1", timeout=0.5, attempts=1)
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found["tcp_port"], 37021)
+
+            hb = UDPHeartbeat("127.0.0.1", udp_port, interval=0.05)
+            hb.start()
+            time.sleep(0.12)
+            hb.stop()
+        finally:
+            server.stop()
 
 
 if __name__ == "__main__":

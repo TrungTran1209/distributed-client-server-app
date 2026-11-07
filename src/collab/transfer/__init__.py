@@ -5,6 +5,7 @@ from .manifest import (
     TransferProgress,
     allocate_non_colliding_path,
     compute_file_sha256,
+    resolve_part_path,
     resolve_safe_paths,
     sanitize_filename,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "TransferProgress",
     "allocate_non_colliding_path",
     "compute_file_sha256",
+    "resolve_part_path",
     "resolve_safe_paths",
     "sanitize_filename",
 ]

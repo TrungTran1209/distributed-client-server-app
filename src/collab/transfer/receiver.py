@@ -6,6 +6,7 @@ import base64
 import binascii
 from dataclasses import dataclass, field
 import hashlib
+import math
 import os
 from pathlib import Path
 import threading
@@ -18,7 +19,7 @@ from .manifest import (
     TransferManifest,
     TransferProgress,
     allocate_non_colliding_path,
-    resolve_safe_paths,
+    resolve_part_path,
 )
 
 RequestFn = Callable[..., dict[str, Any]]
@@ -59,6 +60,7 @@ class FileReceiver:
         offer_timeout: float = 60.0,
         idle_timeout: float = 30.0,
         max_file_size: int = MAX_FILE_SIZE,
+        max_concurrent: int = 8,
         on_offer: OfferCallback | None = None,
         on_progress: ProgressCallback | None = None,
         on_complete: CompleteCallback | None = None,
@@ -69,10 +71,12 @@ class FileReceiver:
         self.offer_timeout = offer_timeout
         self.idle_timeout = idle_timeout
         self.max_file_size = max_file_size
+        self.max_concurrent = max_concurrent
         self.on_offer = on_offer
         self.on_progress = on_progress
         self.on_complete = on_complete
         self._lock = threading.RLock()
+        self._async_gate = threading.BoundedSemaphore(max(4, max_concurrent * 2))
         self._offers: dict[str, _PendingOffer] = {}
         self._receiving: dict[str, _ActiveReceive] = {}
 
@@ -80,6 +84,7 @@ class FileReceiver:
         """Handle incoming transfer events without blocking the reader thread."""
         kind = message.get("type")
         if kind == MessageType.FILE_OFFER_EVENT:
+            self.reap_expired()
             self._handle_offer_event(message)
             return True
         if kind == MessageType.FILE_CHUNK_EVENT:
@@ -94,11 +99,18 @@ class FileReceiver:
         return False
 
     def accept(self, transfer_id_or_prefix: str | None = None) -> TransferManifest:
-        """Accept a pending offer, open its `.part` file first, then send `file_accept`."""
+        """Accept a pending offer, open its `.part` file exclusively, then send `file_accept`."""
         offer = self._pop_matching_offer(transfer_id_or_prefix)
         manifest = offer.manifest
-        part_path, _ = resolve_safe_paths(self.download_dir, manifest.transfer_id, manifest.filename)
-        handle = part_path.open("wb")
+        try:
+            part_path = resolve_part_path(self.download_dir, manifest.transfer_id, manifest.filename)
+            handle = part_path.open("xb")
+        except (TransferError, OSError) as exc:
+            self._async_request(MessageType.FILE_REJECT, transfer_id=manifest.transfer_id, reason="local_io_error")
+            if isinstance(exc, TransferError):
+                raise
+            raise TransferError("io_error", f"Cannot create temporary receive file: {exc}") from exc
+
         active = _ActiveReceive(
             manifest=manifest,
             sender=offer.sender,
@@ -190,23 +202,31 @@ class FileReceiver:
                 self._async_request(MessageType.FILE_REJECT, transfer_id=tid, reason=exc.code)
             return
 
-        ttl = float(message.get("expires_in_sec", self.offer_timeout))
+        raw_ttl = message.get("expires_in_sec", self.offer_timeout)
+        ttl = (
+            float(raw_ttl)
+            if isinstance(raw_ttl, (int, float)) and not isinstance(raw_ttl, bool) and math.isfinite(raw_ttl)
+            else self.offer_timeout
+        )
         pending = _PendingOffer(
             manifest=manifest,
             sender=sender,
             expires_at=time.monotonic() + max(1.0, ttl),
         )
         with self._lock:
+            if len(self._offers) + len(self._receiving) >= self.max_concurrent:
+                self._async_request(
+                    MessageType.FILE_REJECT,
+                    transfer_id=manifest.transfer_id,
+                    reason="receiver_busy",
+                )
+                return
             self._offers[manifest.transfer_id] = pending
 
         if self.on_offer is not None:
             self.on_offer(manifest, sender)
         if self.auto_accept:
-            threading.Thread(
-                target=self._auto_accept_worker,
-                args=(manifest.transfer_id,),
-                daemon=True,
-            ).start()
+            self._spawn_bounded(lambda: self._auto_accept_worker(manifest.transfer_id))
 
     def _auto_accept_worker(self, transfer_id: str) -> None:
         try:
@@ -222,19 +242,33 @@ class FileReceiver:
         tid = message.get("transfer_id")
         if not isinstance(tid, str):
             return
+        progress_to_emit: TransferProgress | None = None
+        error_outcome: tuple[str, str] | None = None
         with self._lock:
             active = self._receiving.get(tid)
             if active is None:
                 return
             try:
-                self._write_validated_chunk(active, message)
+                progress_to_emit = self._write_validated_chunk(active, message)
             except (TransferError, OSError) as exc:
                 code = exc.code if isinstance(exc, TransferError) else "io_error"
-                self._cleanup_receive(tid)
-                self._async_request(MessageType.FILE_CANCEL, transfer_id=tid, reason=code)
-                self._notify_complete(tid, False, {"ok": False, "transfer_id": tid, "code": code, "message": str(exc)})
+                error_outcome = (code, str(exc))
 
-    def _write_validated_chunk(self, active: _ActiveReceive, message: dict[str, Any]) -> None:
+        if error_outcome is not None:
+            code, err_text = error_outcome
+            self._cleanup_receive(tid)
+            self._async_request(MessageType.FILE_CANCEL, transfer_id=tid, reason=code)
+            self._notify_complete(tid, False, {"ok": False, "transfer_id": tid, "code": code, "message": err_text})
+            return
+
+        if progress_to_emit is not None and self.on_progress is not None:
+            self.on_progress(progress_to_emit)
+
+    def _write_validated_chunk(
+        self,
+        active: _ActiveReceive,
+        message: dict[str, Any],
+    ) -> TransferProgress | None:
         index = message.get("index")
         raw_b64 = message.get("data")
         if type(index) is not int or index != active.next_index:
@@ -246,8 +280,7 @@ class FileReceiver:
         except (ValueError, binascii.Error) as exc:
             raise TransferError("invalid_chunk", "Invalid Base64 chunk payload") from exc
 
-        expected_len = active.manifest.expected_chunk_length(index)
-        if len(chunk) != expected_len:
+        if len(chunk) != active.manifest.expected_chunk_length(index):
             raise TransferError("invalid_chunk", "Chunk byte length does not match manifest")
 
         active.handle.write(chunk)
@@ -255,7 +288,7 @@ class FileReceiver:
         active.next_index += 1
         active.bytes_received += len(chunk)
         active.updated_at = time.monotonic()
-        self._emit_progress(active)
+        return self._build_progress_if_milestone(active)
 
     def _handle_end_event(self, message: dict[str, Any]) -> None:
         tid = message.get("transfer_id")
@@ -323,9 +356,9 @@ class FileReceiver:
         if had_state:
             self._notify_complete(tid, False, dict(message))
 
-    def _emit_progress(self, active: _ActiveReceive) -> None:
+    def _build_progress_if_milestone(self, active: _ActiveReceive) -> TransferProgress | None:
         if self.on_progress is None:
-            return
+            return None
         progress = TransferProgress(
             transfer_id=active.manifest.transfer_id,
             filename=active.manifest.filename,
@@ -340,7 +373,8 @@ class FileReceiver:
         is_edge = active.next_index <= 1 or active.next_index == active.manifest.total_chunks
         if is_edge or bucket > active.last_bucket:
             active.last_bucket = bucket
-            self.on_progress(progress)
+            return progress
+        return None
 
     def _pop_matching_offer(self, prefix: str | None) -> _PendingOffer:
         now = time.monotonic()
@@ -390,7 +424,19 @@ class FileReceiver:
             except Exception:  # noqa: BLE001
                 pass
 
-        threading.Thread(target=_send, name=f"file-rx-{kind}", daemon=True).start()
+        self._spawn_bounded(_send)
+
+    def _spawn_bounded(self, fn: Callable[[], None]) -> None:
+        if not self._async_gate.acquire(blocking=False):
+            return
+
+        def _wrapped() -> None:
+            try:
+                fn()
+            finally:
+                self._async_gate.release()
+
+        threading.Thread(target=_wrapped, daemon=True).start()
 
     def _notify_complete(self, transfer_id: str, ok: bool, detail: dict[str, Any]) -> None:
         if self.on_complete is not None:

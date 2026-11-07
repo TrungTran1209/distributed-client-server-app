@@ -23,10 +23,12 @@ class UserStore:
         database: str | Path = "data/users.sqlite3",
         *,
         kdf_params: ScryptParams = DEFAULT_SCRYPT_PARAMS,
+        max_parallel_kdf: int = 8,
     ) -> None:
         self.path = Path(database)
         self.kdf_params = kdf_params
         self._dummy_salt = os.urandom(kdf_params.salt_len)
+        self._kdf_gate = threading.BoundedSemaphore(max(1, max_parallel_kdf))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         default_spec = DEFAULT_SCRYPT_PARAMS.to_spec()
@@ -55,7 +57,8 @@ class UserStore:
         return db
 
     def create_user(self, username: str, password: str) -> bool:
-        salt, digest = derive_password(password, params=self.kdf_params)
+        with self._kdf_gate:
+            salt, digest = derive_password(password, params=self.kdf_params)
         spec = self.kdf_params.to_spec()
         with self._lock, closing(self._connect()) as db:
             try:
@@ -84,8 +87,8 @@ class UserStore:
                 (username,),
             ).fetchone()
         if row is None:
-            # Perform a full derivation for unknown users to reduce timing differences.
-            derive_password(password, self._dummy_salt, params=self.kdf_params)
+            with self._kdf_gate:
+                derive_password(password, self._dummy_salt, params=self.kdf_params)
             return False
 
         salt_bytes = bytes(row[0])
@@ -100,11 +103,14 @@ class UserStore:
         except ValueError:
             return False
 
-        if not verify_password(password, salt_bytes, expected_hash, params=active_params):
+        with self._kdf_gate:
+            matched = verify_password(password, salt_bytes, expected_hash, params=active_params)
+        if not matched:
             return False
 
         if needs_rehash(stored_spec, self.kdf_params):
-            new_salt, new_digest = derive_password(password, params=self.kdf_params)
+            with self._kdf_gate:
+                new_salt, new_digest = derive_password(password, params=self.kdf_params)
             new_spec = self.kdf_params.to_spec()
             with self._lock, closing(self._connect()) as db, db:
                 db.execute(

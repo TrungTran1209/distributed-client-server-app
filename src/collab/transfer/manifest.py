@@ -44,9 +44,12 @@ def sanitize_filename(raw_name: Any) -> str:
     base = re.split(r"[\\/]", normalized)[-1]
     if not base or not base.strip() or base in {".", ".."} or base.endswith((" ", ".")):
         raise TransferError("invalid_filename", "Invalid base filename")
-    if len(base) > MAX_FILENAME_LENGTH:
+    if len(base) > MAX_FILENAME_LENGTH or len(base.encode("utf-8")) > MAX_FILENAME_LENGTH:
         raise TransferError("invalid_filename", "Filename exceeds maximum length")
-    if any(ord(ch) < 32 or ord(ch) == 127 or ch in _FORBIDDEN_CHARS for ch in base):
+    if any(
+        unicodedata.category(ch).startswith("C") or ch in _FORBIDDEN_CHARS
+        for ch in base
+    ):
         raise TransferError("invalid_filename", "Filename contains forbidden characters")
 
     stem = base.split(".", 1)[0].upper()
@@ -69,6 +72,7 @@ def compute_file_sha256(
     path: str | Path,
     *,
     chunk_size: int = DEFAULT_CHUNK_SIZE,
+    max_bytes: int | None = None,
 ) -> tuple[int, str]:
     """Stream a file from disk and return (total_bytes, sha256_hex)."""
     file_path = Path(path)
@@ -81,6 +85,8 @@ def compute_file_sha256(
             if not block:
                 break
             total += len(block)
+            if max_bytes is not None and total > max_bytes:
+                raise TransferError("file_too_large", "File exceeds maximum allowed size")
             hasher.update(block)
     return total, hasher.hexdigest()
 
@@ -117,10 +123,14 @@ class TransferManifest:
         file_path = Path(path)
         if not file_path.exists() or not file_path.is_file():
             raise TransferError("file_not_found", f"File not found: {file_path}")
-        filename = sanitize_filename(file_path.name)
-        size, digest = compute_file_sha256(file_path, chunk_size=chunk_size)
-        if size > max_file_size:
+        if file_path.stat().st_size > max_file_size:
             raise TransferError("file_too_large", "File exceeds maximum allowed size")
+        filename = sanitize_filename(file_path.name)
+        size, digest = compute_file_sha256(
+            file_path,
+            chunk_size=chunk_size,
+            max_bytes=max_file_size,
+        )
         tid = validate_uuid_str(transfer_id) if transfer_id else str(uuid.uuid4())
         return cls(
             transfer_id=tid,
@@ -224,7 +234,7 @@ def allocate_non_colliding_path(download_dir: str | Path, filename: str) -> Path
     base_dir = Path(download_dir)
     base_dir.mkdir(parents=True, exist_ok=True)
     candidate = _ensure_confined(base_dir, base_dir / safe_name)
-    if not candidate.exists():
+    if not candidate.exists() and not candidate.is_symlink():
         return candidate
 
     stem = Path(safe_name).stem
@@ -233,9 +243,18 @@ def allocate_non_colliding_path(download_dir: str | Path, filename: str) -> Path
     while True:
         numbered = f"{stem} ({counter}){suffix}"
         alt = _ensure_confined(base_dir, base_dir / numbered)
-        if not alt.exists():
+        if not alt.exists() and not alt.is_symlink():
             return alt
         counter += 1
+
+
+def resolve_part_path(download_dir: str | Path, transfer_id: str, filename: str) -> Path:
+    """Return a confined temporary `.part` path inside `download_dir`."""
+    tid = validate_uuid_str(transfer_id)
+    safe_name = sanitize_filename(filename)
+    base_dir = Path(download_dir)
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return _ensure_confined(base_dir, base_dir / f".{safe_name}.{tid}.part")
 
 
 def resolve_safe_paths(
@@ -244,11 +263,6 @@ def resolve_safe_paths(
     filename: str,
 ) -> tuple[Path, Path]:
     """Return `(part_path, final_path)` strictly confined inside `download_dir`."""
-    tid = validate_uuid_str(transfer_id)
-    safe_name = sanitize_filename(filename)
-    base_dir = Path(download_dir)
-    base_dir.mkdir(parents=True, exist_ok=True)
-    part_name = f".{safe_name}.{tid}.part"
-    part_path = _ensure_confined(base_dir, base_dir / part_name)
-    final_path = allocate_non_colliding_path(base_dir, safe_name)
+    part_path = resolve_part_path(download_dir, transfer_id, filename)
+    final_path = allocate_non_colliding_path(download_dir, filename)
     return part_path, final_path

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 import ssl
 import threading
@@ -11,21 +12,31 @@ from collab.common.errors import ProtocolError
 from collab.common.framing import encode_frame, recv_frame
 from collab.common.protocol import decode_message, encode_message, make_message, new_request_id
 
+log = logging.getLogger(__name__)
+
 
 class ClientConnectionError(ConnectionError):
     """Raised when the secure server connection cannot be used."""
 
 
 class ClientConnection:
-    def __init__(self, host: str, port: int, tls_context: ssl.SSLContext,
-                 *, server_hostname: str | None = None, timeout: float = 10.0,
-                 on_event: Callable[[dict[str, Any]], None] | None = None) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        tls_context: ssl.SSLContext,
+        *,
+        server_hostname: str | None = None,
+        timeout: float = 10.0,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> None:
         self.host, self.port, self.tls_context = host, port, tls_context
         self.server_hostname, self.timeout = server_hostname or host, timeout
         self.on_event = on_event
         self.sock: ssl.SSLSocket | None = None
         self._send_lock = threading.Lock()
         self._pending_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._pending: dict[str, tuple[threading.Event, dict[str, Any] | None]] = {}
         self._closed = threading.Event()
         self._keepalive_stop = threading.Event()
@@ -44,11 +55,19 @@ class ClientConnection:
             if welcome.get("type") != "welcome" or welcome.get("request_id") != req_id:
                 raise ClientConnectionError("Server did not complete the protocol handshake")
             self.sock.settimeout(None)
-            self._reader = threading.Thread(target=self._receive_loop, name="collab-client-receiver", daemon=True)
+            self._reader = threading.Thread(
+                target=self._receive_loop,
+                name="collab-client-receiver",
+                daemon=True,
+            )
             self._reader.start()
             interval = max(5, int(welcome.get("heartbeat_interval_sec", 30)))
-            self._keepalive = threading.Thread(target=self._keepalive_loop, args=(interval,),
-                                               name="collab-tcp-keepalive", daemon=True)
+            self._keepalive = threading.Thread(
+                target=self._keepalive_loop,
+                args=(interval,),
+                name="collab-tcp-keepalive",
+                daemon=True,
+            )
             self._keepalive.start()
             return welcome
         except BaseException:
@@ -101,7 +120,10 @@ class ClientConnection:
                             pending[0].set()
                             delivered = True
                 if not delivered and self.on_event:
-                    self.on_event(message)
+                    try:
+                        self.on_event(message)
+                    except Exception:  # noqa: BLE001
+                        log.exception("Unhandled error inside client event callback")
         except (OSError, ssl.SSLError, EOFError, ValueError, ProtocolError) as exc:
             if not self._closed.is_set():
                 self._fail(exc)
@@ -115,10 +137,11 @@ class ClientConnection:
                 return
 
     def _fail(self, cause: BaseException) -> None:
-        if self._closed.is_set():
-            return
-        self._closed.set()
-        sock, self.sock = self.sock, None
+        with self._state_lock:
+            if self._closed.is_set():
+                return
+            self._closed.set()
+            sock, self.sock = self.sock, None
         if sock:
             try:
                 sock.shutdown(socket.SHUT_RDWR)
@@ -134,7 +157,10 @@ class ClientConnection:
         for event, _ in pending:
             event.set()
         if self.on_event:
-            self.on_event({"type": "connection_lost", "reason": str(cause)})
+            try:
+                self.on_event({"type": "connection_lost", "reason": str(cause)})
+            except Exception:  # noqa: BLE001
+                pass
 
     def close(self) -> None:
         if self._closed.is_set():
