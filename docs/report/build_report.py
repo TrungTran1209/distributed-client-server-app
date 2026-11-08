@@ -43,11 +43,11 @@ SVG_ARCHITECTURE = """
     <rect x="330" y="16" width="245" height="188" rx="8" fill="#f8fafc" stroke="#0f172a" stroke-width="1.5"/>
     <text x="452" y="38" text-anchor="middle" font-size="12" font-weight="700" fill="#0f172a">Collaboration Server</text>
     <rect x="346" y="48" width="213" height="32" rx="5" fill="#dbeafe" stroke="#3b82f6"/>
-    <text x="452" y="68" text-anchor="middle" font-size="9.5" font-weight="600" fill="#1e3a8a">TCP/TLS Worker Pool (Port 37021)</text>
+    <text x="452" y="68" text-anchor="middle" font-size="9" font-weight="600" fill="#1e3a8a">TCP/TLS Listener + Client Threads</text>
     <rect x="346" y="88" width="213" height="32" rx="5" fill="#e0f2fe" stroke="#0284c7"/>
     <text x="452" y="108" text-anchor="middle" font-size="9.5" font-weight="600" fill="#0c4a6e">SessionRegistry + MessageRouter</text>
     <rect x="346" y="128" width="213" height="32" rx="5" fill="#dcfce7" stroke="#16a34a"/>
-    <text x="452" y="148" text-anchor="middle" font-size="9.5" font-weight="600" fill="#14532d">TransferCoordinator (O(1) RAM Relay)</text>
+    <text x="452" y="148" text-anchor="middle" font-size="9" font-weight="600" fill="#14532d">TransferCoordinator (Chunk Relay)</text>
     <rect x="346" y="166" width="213" height="28" rx="5" fill="#f1f5f9" stroke="#64748b"/>
     <text x="452" y="184" text-anchor="middle" font-size="9" fill="#334155">DiscoveryServer UDP (Port 37020)</text>
 

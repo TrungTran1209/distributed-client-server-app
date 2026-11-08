@@ -114,11 +114,16 @@ class CommandLine:
         command, args = parts[0].lower(), parts[1:]
         if command in {"/help", "help"}:
             self._println(
-                "/register USER  /login USER  /users  /all TEXT  /msg USER TEXT  "
+                "/register USER  /login USER  /logout  /users  /all TEXT  /msg USER TEXT  "
                 "/file PATH USER  /accept [ID]  /reject [ID]  /cancel [ID]  /quit"
             )
         elif command in {"/register", "/login"}:
             self._exec_auth(command, args)
+        elif command == "/logout":
+            self._no_args(command, args)
+            result = self.connection.request("logout")
+            self.users = []
+            self._println("Đã đăng xuất thành công." if result.get("ok") else "Đăng xuất thất bại.")
         elif command in {"/users", "/all", "/msg"}:
             self._exec_chat(command, args)
         elif command in {"/file", "/accept", "/reject", "/cancel"}:
