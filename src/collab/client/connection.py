@@ -27,7 +27,7 @@ class ClientConnection:
         tls_context: ssl.SSLContext,
         *,
         server_hostname: str | None = None,
-        timeout: float = 10.0,
+        timeout: float = 15.0,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.host, self.port, self.tls_context = host, port, tls_context
@@ -79,7 +79,7 @@ class ClientConnection:
             self.sock = None
             raise
 
-    def request(self, kind: str, *, timeout: float = 15.0, **fields: Any) -> dict[str, Any]:
+    def request(self, kind: str, *, timeout: float = 30.0, **fields: Any) -> dict[str, Any]:
         sock = self.sock
         if sock is None or self._closed.is_set():
             raise ClientConnectionError("Not connected to a server")

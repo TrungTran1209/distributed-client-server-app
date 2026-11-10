@@ -94,6 +94,27 @@ class ServerFlowTests(unittest.TestCase):
         self.assertEqual(self.receive(bob)["text"], "hello everyone")
         self.assertTrue(self.receive(alice)["ok"])
 
+    def test_logout_removes_session_and_broadcasts_offline_presence(self):
+        alice = self.connect()
+        bob = self.connect()
+        self.register_and_login(alice, "alice")
+        self.register_and_login(bob, "bob")
+        self.receive(alice)  # bob's presence_online event
+
+        self.send(alice, "logout")
+
+        result = self.receive(alice)
+        self.assertEqual(result["type"], "logout_result")
+        self.assertTrue(result["ok"])
+        offline = self.receive(bob)
+        self.assertEqual(offline["type"], "presence_offline")
+        self.assertEqual(offline["username"], "alice")
+
+        self.send(alice, "chat_send", to=None, text="should be rejected")
+        rejected = self.receive(alice)
+        self.assertEqual(rejected["type"], "error")
+        self.assertEqual(rejected["code"], "unauthorized")
+
     def test_shutdown_unblocks_accept_loop(self):
         worker = threading.Thread(target=self.server.serve_forever, daemon=True)
         worker.start()

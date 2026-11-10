@@ -118,6 +118,10 @@ Luồng kết nối có các bước riêng biệt:
 
 Tách bước hello/welcome đồng bộ khỏi reader thread bảo đảm chỉ có một luồng thao tác socket trong giai đoạn thiết lập giao thức. Server đặt timeout riêng cho TLS handshake và chờ hello để kết nối chưa xác thực không giữ worker vô hạn.
 
+### 3.3.1 Đăng xuất và thu hồi phiên
+
+CLI nhận lệnh `/logout` không có tham số và gửi request `logout` với request ID. Server trả `logout_result` thành công, gỡ session khỏi registry, hủy các phiên truyền tệp còn gắn với người dùng đó và phát `presence_offline` tới các client còn lại. Kết nối TCP vẫn tồn tại nhưng không còn được xác thực; các lệnh cần đăng nhập, như gửi chat, bị từ chối với `unauthorized`. `/quit` đóng client; quá trình đóng kết nối cũng gửi logout best-effort trước khi đóng socket. Mã lệnh nằm tại `src/collab/client/commands.py`, xử lý server tại `src/collab/server/server.py`.
+
 ### 3.4 Đồng thời đọc/ghi trên socket
 
 Client dùng một reader thread duy nhất để lấy frame khỏi socket và phân phối theo `request_id`; response đánh thức đúng waiter, còn message không khớp waiter được xử lý như event. Các request có thể phát sinh từ UI, keepalive và worker truyền tệp, nên client dùng send lock để không interleave byte của hai frame.
@@ -245,7 +249,7 @@ Các giới hạn cần nêu khi trình diễn:
 
 ## 11. Đối chiếu yêu cầu kỹ thuật và mã nguồn
 
-Bảng dưới đây tóm tắt nơi có thể kiểm tra từng nhóm yêu cầu. Đây là đối chiếu tĩnh giữa repository và các yêu cầu được ghi trong `TEAM_PLAN.md`; trạng thái test không được chạy lại khi soạn tài liệu này.
+Bảng dưới đây tóm tắt nơi có thể kiểm tra từng nhóm yêu cầu. Đây là đối chiếu giữa repository và các yêu cầu được ghi trong `TEAM_PLAN.md`; kết quả chạy thực tế được ghi riêng bên dưới.
 
 | Nhóm yêu cầu | Hiện thực trong repository | Tệp tham khảo |
 |---|---|---|
@@ -257,9 +261,16 @@ Bảng dưới đây tóm tắt nơi có thể kiểm tra từng nhóm yêu cầ
 | Discovery/heartbeat UDP | Request/announcement và datagram heartbeat phụ trợ | `src/collab/client/discovery.py`, `src/collab/server/discovery.py` |
 | Truyền tệp tin cậy | Manifest, chunk tuần tự, timeout, `.part`, xác minh SHA-256, cleanup | `src/collab/transfer/`, `src/collab/server/transfer_coordinator.py` |
 | CLI và trải nghiệm chạy | Lệnh tương tác, presence, chat, transfer progress | `src/collab/client/commands.py`, `README.md` |
-| Kiểm thử | Unit và integration test cho framing, protocol, auth/KDF, UDP, transfer, TLS và tải 12 client | `tests/unit/`, `tests/integration/` |
+| Kiểm thử | 34 unit tests và 5 integration tests; trong đó có logout/presence/ủy quyền sau logout và tải 12 client | `tests/unit/`, `tests/integration/` |
 
-Các test hiện có bao gồm framing/EOF và giới hạn frame (`test_framing.py`), UDP datagram và discovery (`test_udp_discovery.py`), luồng server/chat (`test_server_flow.py`), cùng integration TLS kiểm tra certificate không tin cậy, truyền tệp nhiều chunk và tệp rỗng, từ chối/timeout, ngắt kết nối giữa chừng và kịch bản 12 client (`test_file_transfer_integration.py`). Đây là phạm vi có test trong repository, không phải kết quả chạy mới trong lần cập nhật báo cáo. Để báo cáo kết quả đạt/coverage, cần chạy lại chính các lệnh trong README trên môi trường nộp và lưu đầu ra thực tế.
+Ngày 10/11/2026, hai lệnh sau đã chạy trên Python 3.12.6 trong môi trường làm việc này; cả hai đều kết thúc với mã thoát 0:
+
+| Bộ kiểm thử | Kết quả thực tế |
+|---|---|
+| `python -m unittest discover -s tests/unit -v` | 34 tests, 1.677 giây, `OK` |
+| `python -m unittest discover -s tests/integration -v` | 5 tests, 5.348 giây, `OK` |
+
+Ca `test_logout_removes_session_and_broadcasts_offline_presence` trong `tests/unit/test_server_flow.py` kiểm tra response `logout_result` thành công, phát `presence_offline` cho client còn lại, và từ chối request chat tiếp theo bằng lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Các số liệu trên là số test/thời gian chạy, không phải coverage.
 
 ## 12. Kết luận
 

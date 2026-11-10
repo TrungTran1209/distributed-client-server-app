@@ -32,7 +32,7 @@ def main() -> None:
         default=os.environ.get("COLLAB_DISCOVERY_HOST", "127.0.0.1"),
         help="UDP unicast destination for discovery (default: localhost)",
     )
-    parser.add_argument("--timeout", type=float, default=1.5, help="UDP discovery timeout in seconds")
+    parser.add_argument("--timeout", type=float, default=2.5, help="UDP discovery timeout in seconds")
     parser.add_argument(
         "--download-dir",
         default=os.environ.get("COLLAB_DOWNLOAD_DIR", "downloads"),

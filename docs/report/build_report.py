@@ -396,15 +396,15 @@ def markdown_to_html(md_text: str) -> str:
 
 
 def _find_browser() -> str:
-    for cmd in ("msedge", "chrome", "chromium", "google-chrome"):
+    for cmd in ("chrome", "msedge", "chromium", "google-chrome"):
         found = shutil.which(cmd)
         if found:
             return found
     windows_paths = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
         r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
     ]
     for candidate in windows_paths:
         if Path(candidate).is_file():
@@ -420,12 +420,16 @@ def build_pdf() -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         html_file = Path(tmp) / "report.html"
         out_pdf = Path(tmp) / "technical-report.pdf"
+        browser_profile = Path(tmp) / "browser-profile"
         html_file.write_text(rendered_html, encoding="utf-8")
         subprocess.run(
             [
                 browser,
                 "--headless",
                 "--disable-gpu",
+                "--no-first-run",
+                "--disable-extensions",
+                f"--user-data-dir={browser_profile}",
                 "--no-pdf-header-footer",
                 f"--print-to-pdf={out_pdf}",
                 html_file.resolve().as_uri(),

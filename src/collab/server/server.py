@@ -37,7 +37,7 @@ class CollaborationServer:
         auth: AuthService,
         *,
         max_clients: int = 100,
-        idle_timeout: int = 90,
+        idle_timeout: int = 300,
     ) -> None:
         self.host, self.port = host, port
         self.tls_context, self.auth = tls_context, auth
@@ -118,7 +118,7 @@ class CollaborationServer:
     def _handle_connection(self, raw: socket.socket, address: tuple[Any, ...]) -> None:
         tls_sock: ssl.SSLSocket | None = None
         try:
-            raw.settimeout(10)
+            raw.settimeout(15)
             tls_sock = self.tls_context.wrap_socket(raw, server_side=True)
             tls_sock.settimeout(self.idle_timeout)
             self._connection_loop(tls_sock, address)
@@ -140,7 +140,8 @@ class CollaborationServer:
 
     def _connection_loop(self, sock: ssl.SSLSocket, address: tuple[Any, ...]) -> None:
         greeted = False
-        auth_deadline = time.monotonic() + min(30.0, float(self.idle_timeout))
+        auth_grace = min(180.0, float(self.idle_timeout))
+        auth_deadline = time.monotonic() + auth_grace
         while not self._stop.is_set():
             try:
                 request = decode_message(recv_frame(sock))
@@ -179,6 +180,8 @@ class CollaborationServer:
                 continue
             try:
                 self._dispatch(sock, address, request, session)
+                if session is not None and self.sessions.get_socket(sock) is None:
+                    auth_deadline = time.monotonic() + auth_grace
             except ProtocolError as exc:
                 self._send_raw(
                     sock,

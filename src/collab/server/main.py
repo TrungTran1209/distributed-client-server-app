@@ -38,11 +38,23 @@ def main() -> None:
         default=_env_path("COLLAB_TLS_KEY", os.environ.get("COLLAB_KEY_FILE", "certs/server.key")),
     )
     parser.add_argument("--database", default=_env_path("COLLAB_DATABASE", "data/users.sqlite3"))
+    parser.add_argument(
+        "--idle-timeout",
+        type=int,
+        default=int(os.environ.get("COLLAB_IDLE_TIMEOUT", "300")),
+        help="idle TCP session timeout in seconds (default: 300)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     tls = create_server_context(args.cert, args.key)
-    server = CollaborationServer(args.host, args.port, tls, AuthService(UserStore(args.database)))
+    server = CollaborationServer(
+        args.host,
+        args.port,
+        tls,
+        AuthService(UserStore(args.database)),
+        idle_timeout=args.idle_timeout,
+    )
     discovery = DiscoveryServer(
         args.port, bind_host=args.host, udp_port=args.udp_port,
         advertise_host=args.advertise_host,
