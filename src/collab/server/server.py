@@ -157,58 +157,27 @@ class CollaborationServer:
     def _connection_loop(self, sock: ssl.SSLSocket, address: tuple[Any, ...]) -> None:
         greeted = False
         auth_deadline = time.monotonic() + self.auth_timeout
-        auth_state = {"failures": 0}
+        auth_failures = 0
         while not self._stop.is_set():
-            pre_session = self.sessions.get_socket(sock)
-            if pre_session is None:
-                remaining = auth_deadline - time.monotonic()
-                if remaining <= 0:
-                    return
-                sock.settimeout(remaining)
-            else:
-                sock.settimeout(self.idle_timeout)
-            try:
-                request = decode_message(recv_frame(sock))
-            except socket.timeout:
+            outcome = self._recv_next_request(sock, auth_deadline)
+            if outcome is None:
                 return
-            session = self.sessions.get_socket(sock)
-            if session is None and time.monotonic() > auth_deadline:
-                return
-            if session:
-                self.sessions.touch(sock)
-            kind = request["type"]
+            request, session = outcome
             request_id = request.get("request_id")
             if not greeted:
-                if kind != MessageType.HELLO:
-                    self._send_raw(
-                        sock,
-                        make_message(
-                            MessageType.ERROR,
-                            request_id=request_id,
-                            code="invalid_message",
-                            message="Send hello first",
-                        ),
-                    )
+                if not self._handle_greeting(sock, request["type"], request_id):
                     return
                 greeted = True
-                self._send_raw(
-                    sock,
-                    make_message(
-                        MessageType.WELCOME,
-                        request_id=request_id,
-                        protocol_version=1,
-                        server_name="collab",
-                        heartbeat_interval_sec=30,
-                    ),
-                )
                 continue
             try:
-                keep_open = self._dispatch(sock, address, request, session, auth_state)
+                keep_open, auth_failures = self._dispatch(
+                    sock, address, request, session, auth_failures
+                )
                 if not keep_open:
                     return
                 if session is not None and self.sessions.get_socket(sock) is None:
                     auth_deadline = time.monotonic() + self.auth_timeout
-                    auth_state["failures"] = 0
+                    auth_failures = 0
             except ProtocolError as exc:
                 self._send_raw(
                     sock,
@@ -220,23 +189,68 @@ class CollaborationServer:
                     ),
                 )
 
+    def _recv_next_request(
+        self, sock: ssl.SSLSocket, auth_deadline: float
+    ) -> tuple[dict[str, Any], Session | None] | None:
+        if self.sessions.get_socket(sock) is None:
+            remaining = auth_deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            sock.settimeout(remaining)
+        else:
+            sock.settimeout(self.idle_timeout)
+        try:
+            request = decode_message(recv_frame(sock))
+        except socket.timeout:
+            return None
+        session = self.sessions.get_socket(sock)
+        if session is None and time.monotonic() > auth_deadline:
+            return None
+        if session:
+            self.sessions.touch(sock)
+        return request, session
+
+    def _handle_greeting(self, sock: ssl.SSLSocket, kind: str, request_id: str | None) -> bool:
+        if kind != MessageType.HELLO:
+            self._send_raw(
+                sock,
+                make_message(
+                    MessageType.ERROR,
+                    request_id=request_id,
+                    code="invalid_message",
+                    message="Send hello first",
+                ),
+            )
+            return False
+        self._send_raw(
+            sock,
+            make_message(
+                MessageType.WELCOME,
+                request_id=request_id,
+                protocol_version=1,
+                server_name="collab",
+                heartbeat_interval_sec=30,
+            ),
+        )
+        return True
+
     def _dispatch(
         self,
         sock,
         address,
         request,
         session: Session | None,
-        auth_state: dict[str, int],
-    ) -> bool:
+        auth_failures: int,
+    ) -> tuple[bool, int]:
         kind = request["type"]
         request_id = request.get("request_id")
         if kind == MessageType.PING:
             self._send_raw(sock, make_message(MessageType.PONG, request_id=request_id))
-            return True
+            return True, auth_failures
         if session is None:
-            return self._dispatch_unauthenticated(sock, address, request, request_id, auth_state)
+            return self._dispatch_unauthenticated(sock, address, request, request_id, auth_failures)
         self._dispatch_authenticated(sock, request, session, request_id)
-        return True
+        return True, 0
 
     def _dispatch_unauthenticated(
         self,
@@ -244,8 +258,8 @@ class CollaborationServer:
         address,
         request,
         request_id: str | None,
-        auth_state: dict[str, int],
-    ) -> bool:
+        auth_failures: int,
+    ) -> tuple[bool, int]:
         kind = request["type"]
         if kind == MessageType.REGISTER:
             peer_ip = str(address[0])
@@ -259,7 +273,7 @@ class CollaborationServer:
                         code="rate_limited",
                     ),
                 )
-                return True
+                return True, auth_failures
             try:
                 ok, _ = self.auth.register(request.get("username"), request.get("password"))
                 response: dict[str, Any] = {"ok": ok}
@@ -268,9 +282,9 @@ class CollaborationServer:
             except ProtocolError as exc:
                 response = {"ok": False, "code": "invalid_message", "message": str(exc)}
             self._send_raw(sock, make_message(MessageType.REGISTER_RESULT, request_id=request_id, **response))
-            return True
+            return True, auth_failures
         if kind == MessageType.LOGIN:
-            return self._handle_login(sock, address, request, request_id, auth_state)
+            return self._handle_login(sock, address, request, request_id, auth_failures)
         self._send_raw(
             sock,
             make_message(
@@ -280,7 +294,7 @@ class CollaborationServer:
                 message="Login required",
             ),
         )
-        return True
+        return True, auth_failures
 
     def _handle_login(
         self,
@@ -288,15 +302,15 @@ class CollaborationServer:
         address,
         request,
         request_id: str | None,
-        auth_state: dict[str, int],
-    ) -> bool:
+        auth_failures: int,
+    ) -> tuple[bool, int]:
         try:
             ok, username = self.auth.login(request.get("username"), request.get("password"))
         except ProtocolError:
             ok, username = False, ""
         if not ok:
-            auth_state["failures"] += 1
-            throttled = auth_state["failures"] >= self.max_auth_failures
+            next_failures = auth_failures + 1
+            throttled = next_failures >= self.max_auth_failures
             self._send_raw(
                 sock,
                 make_message(
@@ -306,7 +320,7 @@ class CollaborationServer:
                     code="rate_limited" if throttled else "invalid_credentials",
                 ),
             )
-            return not throttled
+            return not throttled, next_failures
         new_session = Session(username, sock, str(address[0]), int(address[1]), str(uuid.uuid4()))
         if not self.sessions.add(new_session):
             self._send_raw(
@@ -318,8 +332,7 @@ class CollaborationServer:
                     code="already_online",
                 ),
             )
-            return True
-        auth_state["failures"] = 0
+            return True, auth_failures
         self._send_raw(
             sock,
             make_message(
@@ -332,7 +345,7 @@ class CollaborationServer:
         )
         self._send_raw(sock, make_message(MessageType.USER_LIST, users=self.router.user_list()))
         self.router.broadcast_presence(MessageType.PRESENCE_ONLINE, username, exclude=sock)
-        return True
+        return True, 0
 
     def _dispatch_authenticated(self, sock, request, session: Session, request_id: str | None) -> None:
         kind = request["type"]
