@@ -20,7 +20,8 @@ Hai lớp bảo vệ này giải quyết hai mối đe dọa tách biệt:
 - **Tham số mặc định (`collab.common.crypto.DEFAULT_SCRYPT_PARAMS`):**
   - Thuật toán: `hashlib.scrypt`
   - Phiên bản: `v=1`
-  - Chi phí CPU/RAM: `n = 16384` ($2^{14}$), `r = 8`, `p = 1` (~16 MiB bộ nhớ làm việc mỗi lần dẫn xuất, giới hạn trần `maxmem` an toàn 64 MiB)
+  - Chi phí CPU/RAM: `n = 16384` ($2^{14}$), `r = 8`, `p = 1` (~16 MiB bộ nhớ làm việc mỗi lần dẫn xuất, `maxmem` mặc định 64 MiB cho mỗi lần gọi và trần an toàn tuyệt đối `MAX_SCRYPT_MEMORY = 256 MiB` khi phân tích tham số)
+  - Chuẩn hóa mật khẩu: chuẩn hóa Unicode NFKC trước khi băm (có fallback tương thích ngược cho tài khoản cũ); tên người dùng chuẩn hóa NFC và phân biệt chữ hoa/thường (`Alice` ≠ `alice`).
   - Độ dài salt: `16 bytes` sinh ngẫu nhiên từ CSPRNG của hệ điều hành (`os.urandom(16)`) riêng biệt cho từng tài khoản
   - Độ dài khóa dẫn xuất: `dklen = 32 bytes`
 - **Định dạng lưu trữ và nâng cấp tự động (`collab.server.user_store.UserStore`):**
@@ -40,9 +41,10 @@ Hai lớp bảo vệ này giải quyết hai mối đe dọa tách biệt:
   - Trong suốt quá trình nhận, dữ liệu chỉ được ghi vào tệp ẩn tạm thời `.<safe_name>.<transfer_id>.part`.
   - Tệp tạm chỉ được đổi tên nguyên tử (`os.replace`) thành tệp hoàn chỉnh sau khi tổng số chunk, kích thước byte và mã băm **SHA-256 đầu-cuối** đều khớp 100% với manifest ban đầu. Nếu kết nối đứt, quá hạn hoặc lệch checksum, tệp `.part` bị xóa ngay lập tức.
   - Nếu trong thư mục nhận đã có sẵn tệp trùng tên, `allocate_non_colliding_path()` tự động cấp tên mới (`report (1).pdf`) thay vì ghi đè mất tệp sẵn có của người dùng.
-- **Bảo vệ bộ nhớ Server và giới hạn DoS:**
-  - Server kiểm tra kích thước frame tối đa (`MAX_FRAME_SIZE = 1 MiB`), kích thước tệp tối đa (`MAX_FILE_SIZE = 64 MiB`), kích thước chunk tối đa (`256 KiB`) và giới hạn tối đa 3 phiên truyền đồng thời trên mỗi người dùng gửi.
-  - `TransferCoordinator` chuyển tiếp từng chunk trực tiếp sang socket người nhận mà không tích trữ nội dung tệp trong RAM hay ổ đĩa của server (chi phí bộ nhớ `O(1)` theo kích thước tệp).
+- **Bảo vệ bộ nhớ Server, giới hạn tốc độ và chống DoS:**
+  - Server tách thời hạn trước xác thực (`auth_timeout = 60s`) khỏi phiên đã đăng nhập (`idle_timeout = 90s`), giới hạn tối đa 5 lần đăng nhập sai trên mỗi kết nối, giới hạn tốc độ đăng ký theo IP (mặc định 30 lượt/phút) và áp dụng token-bucket cho tin nhắn chat (`code = "rate_limited"`).
+  - Server kiểm tra kích thước frame tối đa (`MAX_FRAME_SIZE = 1 MiB`), kích thước tệp tối đa (`MAX_FILE_SIZE = 64 MiB`), kích thước chunk tối đa (`256 KiB`), giới hạn tối đa 3 phiên truyền đồng thời trên mỗi người dùng gửi và tối đa 2 lời mời đồng thời trên mỗi cặp người gửi → người nhận.
+  - `TransferCoordinator` chuyển tiếp từng chunk trực tiếp sang socket người nhận mà không tích trữ nội dung tệp trong RAM hay ổ đĩa của server (chi phí bộ nhớ `O(1)` theo kích thước tệp), đồng thời không giữ khóa điều phối khi thực hiện I/O mạng; các thao tác gửi quá hạn (`send_timeout = 15s`) tự động đóng socket bị nghẽn.
 
 ## 5. Quản lý Tài sản Nhạy cảm và Giới hạn Bảo mật (Threat Model)
 
@@ -51,3 +53,4 @@ Hai lớp bảo vệ này giải quyết hai mối đe dọa tách biệt:
   1. **Không mã hóa đầu-cuối (E2EE) chống lại Server:** vì kiến trúc là Client–Server định tuyến tập trung qua TLS, server giải mã frame TLS để kiểm tra giao thức và chuyển tiếp sang kết nối TLS của người nhận. Hệ thống bảo vệ trước kẻ nghe lén trên mạng LAN, nhưng người vận hành server được coi là thành phần tin cậy trong mô hình này.
   2. **Chứng chỉ tự ký trong môi trường demo:** phù hợp khi phân phối tường minh tệp chứng chỉ/CA qua tham số `--ca`, nhưng không cung cấp cơ chế thu hồi chứng chỉ (CRL/OCSP) hay quản trị định danh PKI doanh nghiệp.
   3. **Dữ liệu nghỉ (Data at rest):** mật khẩu được băm bằng `scrypt`, nhưng các tệp người dùng sau khi tải về thư mục `downloads/` được lưu ở dạng nguyên bản theo quyền hệ điều hành của người dùng chạy client.
+  4. **Đọc/ghi đồng thời trên `SSLSocket` ở mô hình thread-per-client:** worker của một phiên gọi `recv()` trong khi worker khác có thể chuyển tiếp sự kiện qua `sendall()` dưới `Session.send_lock` và giới hạn `send_timeout`. Cấu trúc này vượt qua ổn định bài kiểm thử tải 12 client TLS đồng thời ở quy mô đồ án; với hệ thống sản xuất tải cao nên tách hàng đợi ghi riêng (writer thread hoặc event loop bất đồng bộ) cho mỗi phiên TLS.

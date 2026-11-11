@@ -17,7 +17,7 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 | Mật khẩu | Đề gốc không quy định KDF hay lưu tài khoản; nhóm chọn không lưu plaintext, dùng `hashlib.scrypt` với salt riêng cho mỗi tài khoản |
 | Người dùng và trạng thái | Server quản lý đăng ký/đăng nhập, phiên hoạt động, IP/cổng TCP và trạng thái online |
 | Giao diện | CLI |
-| Hạn nộp tạm theo ngày số trong đề | 16/11/2026, 23:59; |
+| Hạn nộp chính thức | 00:00 ngày 17/11/2026 |
 
 
 ### Phạm vi bảo mật đã chọn
@@ -42,7 +42,7 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 | 7 | Phục hồi: timeout, broken pipe, client thoát an toàn, server không crash. | **Đã hoàn thành & kiểm thử:** xử lý timeout offer/chunk/idle, ngắt kết nối đột ngột giữa chừng tự xóa `.part`, server vẫn phục vụ bình thường các client khác. |
 | 8 | Mã hóa payload bằng thư viện mật mã chuẩn rồi giải mã phía nhận. | **Đã hoàn thành & kiểm thử:** toàn bộ luồng TCP bọc TLS 1.2+; kiểm thử từ chối chứng chỉ không tin cậy; mật khẩu lưu bằng `scrypt` kèm phiên bản `kdf_params`. |
 | 9 | UI dễ dùng, hiển thị message, tiến độ file và danh sách user hoạt động. | **Đã hoàn thành & kiểm thử:** CLI hỗ trợ `/file`, `/accept`, `/reject`, `/cancel`, hiển thị tiến độ `%`, presence và danh sách user. |
-| 10 | Code gọn, có chú thích và qua mô phỏng mạng cục bộ từ nhiều terminal. | **Đã hoàn thành:** toàn bộ unit & integration tests đạt >85% coverage; báo cáo kỹ thuật PDF đã được biên dịch đầy đủ. |
+| 10 | Code gọn, có chú thích và qua mô phỏng mạng cục bộ từ nhiều terminal. | **Đã hoàn thành:** toàn bộ 53 unit tests & 5 integration tests PASS (87.7% statement coverage); báo cáo kỹ thuật PDF đã được biên dịch đầy đủ. |
 
 Đề cũng nêu UDP cho discovery/heartbeat trong mục công nghệ. Nhóm đã chọn đây là phạm vi bắt buộc; rubric không chấm UDP thành một điểm riêng. Cần thể hiện chức năng và giới hạn trong demo/tài liệu.
 
@@ -273,7 +273,7 @@ Thống nhất transfer ID, tên tệp an toàn, kích thước khai báo, kích
 - [x] Hoàn thiện báo cáo PDF (`docs/report/technical-report.pdf` được biên dịch từ `docs/report/technical-report.md`) có kiến trúc, giao thức, sequence diagram và phản ánh thử thách/cách giải quyết.
 - [x] Đã kiểm thử mô phỏng mạng nội bộ với nhiều client đồng thời (12 clients) và ghi lại kết quả thực tế.
 - [x] Repository/ZIP không chứa private key, mật khẩu, database runtime hoặc tệp người dùng.
-- [ ] Nhóm kiểm tra hạn nộp 17/11/2026 trên kênh chính thức của môn học.
+- [x] Hạn nộp chính thức đã xác nhận: 00:00 ngày 17/11/2026.
 
 ## 10. Thuật ngữ dùng trong dự án
 

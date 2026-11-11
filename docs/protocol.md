@@ -40,8 +40,8 @@ Sau TLS, `hello` phải là message đầu tiên. Server phản hồi `welcome`;
 ```
 
 - Username chuẩn hóa Unicode NFC, dài 1–32 ký tự (`[\w.-]`, phân biệt hoa thường, cấm `.` và `..`).
-- Password dài 8–128 ký tự, chỉ gửi trong kênh TLS. Server lưu `salt` (16 byte), `password_hash` (32 byte) và chuỗi phiên bản tham số `kdf_params` (`scrypt$v=1$n=16384$r=8$p=1$dklen=32`) trong SQLite.
-- Trùng username trả `register_result` với `ok:false`, `code:"username_taken"`.
+- Password chuẩn hóa Unicode NFKC (tương thích ngược khi đăng nhập hash cũ), dài 8–128 ký tự, chỉ gửi trong kênh TLS. Server lưu `salt` (16 byte), `password_hash` (32 byte) và chuỗi phiên bản tham số `kdf_params` (`scrypt$v=1$n=16384$r=8$p=1$dklen=32`) trong SQLite.
+- Trùng username trả `register_result` với `ok:false`, `code:"username_taken"`. Vượt ngưỡng tạo tài khoản theo IP trả `ok:false`, `code:"rate_limited"`.
 
 ### 3.2 Đăng nhập và Presence
 
@@ -53,7 +53,7 @@ Sau TLS, `hello` phải là message đầu tiên. Server phản hồi `welcome`;
 {"v":1,"type":"presence_offline","username":"bob"}
 ```
 
-- Sai thông tin đăng nhập trả `ok:false, code:"invalid_credentials"`; tài khoản đang đăng nhập ở kết nối khác trả `code:"already_online"`.
+- Sai thông tin đăng nhập trả `ok:false, code:"invalid_credentials"`; vượt giới hạn thử mật khẩu sai trên một kết nối trả `ok:false, code:"rate_limited"` rồi đóng kết nối; tài khoản đang đăng nhập ở kết nối khác trả `code:"already_online"`.
 - Nếu tham số `kdf_params` lưu trong SQLite cũ hơn cấu hình mục tiêu của server, server tự động dẫn xuất lại hash mới khi đăng nhập hợp lệ.
 - `user_list` gửi ngay sau `login_result` kèm địa chỉ IP và cổng TCP nguồn mà server quan sát được.
 
@@ -65,8 +65,8 @@ Sau TLS, `hello` phải là message đầu tiên. Server phản hồi `welcome`;
 {"v":1,"type":"chat_message","message_id":"UUID","from":"alice","to":null,"text":"Xin chào","sent_at":"2026-11-07T10:00:00Z"}
 ```
 
-- `to:null` gửi broadcast tới mọi người dùng online khác; `to:"bob"` gửi tin nhắn riêng 1-1.
-- `text` dài 1–4,000 ký tự. Người nhận offline trả `chat_result` với `ok:false, code:"recipient_unavailable"`.
+- `to:null` gửi broadcast tới mọi người dùng online khác; `to:"bob"` (được chuẩn hóa Unicode NFC giống lúc đăng nhập) gửi tin nhắn riêng 1-1.
+- `text` dài 1–4,000 ký tự. Người nhận offline trả `chat_result` với `ok:false, code:"recipient_unavailable"`; gửi vượt tốc độ token-bucket trả `ok:false, code:"rate_limited"`.
 
 ### 3.4 Logout, Ping và Lỗi chung
 
@@ -98,7 +98,7 @@ Server kiểm tra hợp lệ và đẩy sự kiện `file_offer_event` tới ng�
 ```
 
 - Giới hạn mặc định: `DEFAULT_CHUNK_SIZE = 65,536` byte (64 KiB), `MAX_CHUNK_SIZE = 262,144` byte (256 KiB), `MAX_FILE_SIZE = 67,108,864` byte (64 MiB), tối đa 3 phiên gửi đồng thời mỗi user. Tệp rỗng (`size = 0`) hợp lệ với `total_chunks = 0`.
-- `filename` không được chứa ký tự phân tách đường dẫn (`/`, `\`, `:`), ký tự cấm hoặc tên thiết bị hệ thống; dài tối đa 200 ký tự.
+- `filename` không được chứa ký tự phân tách đường dẫn (`/`, `\`, `:`), ký tự cấm hoặc tên thiết bị hệ thống; dài tối đa 200 ký tự và không quá 200 byte UTF-8.
 
 ### 4.2 Chấp nhận hoặc Từ chối (`file_accept` / `file_reject` / `file_decision`)
 

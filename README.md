@@ -61,14 +61,40 @@ Nếu `openssl` chưa nằm trong `PATH` trên Windows, có thể gọi trực t
 
 ## Chạy máy chủ (Server)
 
-Trong terminal thứ nhất:
+Trong terminal thứ nhất (demo trên cùng 1 máy dùng `--host 127.0.0.1` để khớp chứng chỉ `localhost` / `127.0.0.1`):
 
 ```powershell
-python -m collab.server.main --host 0.0.0.0 --port 37021 --udp-port 37020 `
+python -m collab.server.main --host 127.0.0.1 --port 37021 --udp-port 37020 `
   --cert certs/server.crt --key certs/server.key
 ```
 
-Máy chủ khởi tạo cơ sở dữ liệu tài khoản tại `data/users.sqlite3`. Khi chạy qua LAN, mở cổng TCP `37021` và UDP `37020` trên tường lửa, có thể chỉ định thêm `--advertise-host <IP-LAN>`.
+Khi chạy qua **mạng LAN** giữa nhiều máy (sau khi tạo chứng chỉ có SAN chứa IP LAN như `IP:192.168.1.20` và mở cổng TCP `37021`, UDP `37020` trên tường lửa):
+
+```powershell
+python -m collab.server.main --host 0.0.0.0 --advertise-host 192.168.1.20 `
+  --port 37021 --udp-port 37020 --cert certs/server.crt --key certs/server.key
+```
+
+Máy chủ khởi tạo cơ sở dữ liệu tài khoản tại `data/users.sqlite3` (tuỳ chỉnh qua `--database`). Khi lắng nghe trên `0.0.0.0`, `DiscoveryServer` tự động công bố địa chỉ IP của card mạng định tuyến tới chính client đang hỏi (ví dụ trả `127.0.0.1` cho client cục bộ ngay cả khi máy bật VPN/WSL).
+
+### Các tham số dòng lệnh & Biến môi trường chính
+
+> **Lưu ý:** Ứng dụng đọc trực tiếp biến môi trường từ hệ điều hành và **không tự động nạp tệp `.env`**. Xem mẫu biến tại [`.env.example`](.env.example).
+
+| Thành phần | Cờ dòng lệnh | Biến môi trường | Mặc định | Ý nghĩa |
+|---|---|---|---|---|
+| Server | `--host` | `COLLAB_HOST` | `0.0.0.0` | Địa chỉ IPv4 lắng nghe TCP & UDP |
+| Server | `--port` | `COLLAB_PORT` / `COLLAB_TCP_PORT` | `37021` | Cổng TCP/TLS chính |
+| Server | `--udp-port` | `COLLAB_UDP_PORT` | `37020` | Cổng UDP discovery & heartbeat |
+| Server | `--advertise-host` | `COLLAB_ADVERTISE_HOST` | *(tự định tuyến)* | IP/hostname công bố trong `server_announcement` |
+| Server | `--cert` / `--key` | `COLLAB_TLS_CERT` / `COLLAB_TLS_KEY` | `certs/server.crt`, `.key` | Chứng chỉ & khóa riêng TLS của server |
+| Server | `--database` | `COLLAB_DATABASE` | `data/users.sqlite3` | Đường dẫn cơ sở dữ liệu tài khoản SQLite |
+| Server | `--idle-timeout` | `COLLAB_IDLE_TIMEOUT` | `90` | Thời gian chờ nhàn rỗi (giây) cho phiên đã đăng nhập |
+| Server | `--auth-timeout` | `COLLAB_AUTH_TIMEOUT` | `60` | Thời hạn tối đa (giây) để hoàn tất đăng nhập sau kết nối |
+| Client | `--host` / `--port` | `COLLAB_SERVER_HOST` / `COLLAB_SERVER_PORT` | *(dò UDP)* / `37021` | Địa chỉ và cổng TCP/TLS của máy chủ |
+| Client | `--discover` / `--broadcast` | `COLLAB_DISCOVERY_HOST` (`127.0.0.1`) | tắt | Dò tìm máy chủ qua UDP unicast hoặc LAN broadcast |
+| Client | `--ca` | `COLLAB_TLS_CA_FILE` | *(CA hệ thống)* | Tệp chứng chỉ CA tin cậy để xác minh TLS |
+| Client | `--download-dir` | `COLLAB_DOWNLOAD_DIR` | `downloads` | Thư mục lưu tệp nhận sau khi khớp SHA-256 |
 
 ## Chạy các trình khách (Clients)
 
@@ -125,7 +151,7 @@ python -m unittest discover -s tests/integration -v
 python docs/report/build_report.py
 ```
 
-Kết quả chạy thực tế gần nhất (11/11/2026): **37 unit tests và 5 integration tests đều đạt (81.1% coverage)**. Unit test luồng server và CLI bao gồm `/logout`: dọn sạch phiên truyền tệp/tệp tạm `.part` cục bộ, client khác nhận `presence_offline`, và yêu cầu chat sau đăng xuất bị từ chối (`unauthorized`).
+Kết quả chạy thực tế gần nhất (11/11/2026): **53 unit tests và 5 integration tests đều đạt (87.7% statement coverage trên `src/collab/`)**. Bộ kiểm thử bao phủ đầy đủ bắt tay TLS, định tuyến UDP theo peer, giới hạn tốc độ (`rate_limited`), chuẩn hóa Unicode, hủy phiên truyền tệp/tệp tạm `.part` khi `/logout` hoặc đứt mạng, cùng tải 12 client TLS đồng thời.
 
 ## Tài liệu thiết kế chi tiết
 

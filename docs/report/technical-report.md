@@ -144,7 +144,7 @@ TCP `ping`/`pong` được dùng làm keepalive ứng dụng (mỗi 30 giây); s
 
 Server tạo `AF_INET/SOCK_STREAM` listener, bind vào host/port cấu hình, gọi `listen(64)` rồi lặp `accept()`. Backlog 64 là hàng đợi kết nối đang chờ hệ điều hành bàn giao cho ứng dụng; nó khác với giới hạn worker `max_clients` (mặc định 100). Khi đạt giới hạn worker, socket mới được đóng. Mỗi kết nối được chấp nhận có worker riêng để thực hiện TLS và đọc request; worker không đồng nghĩa với một tiến trình riêng.
 
-Bind address quyết định interface nào nhận kết nối. `127.0.0.1` chỉ phục vụ máy cục bộ; `0.0.0.0` lắng nghe trên mọi IPv4 interface. Địa chỉ `0.0.0.0` không phải địa chỉ để client kết nối. Khi quảng bá discovery, server cần công bố IP có thể định tuyến tới client; có thể cấu hình `--advertise-host` nếu địa chỉ tự chọn không phù hợp. Cổng mặc định TCP `37021` và UDP `37020` cần được cho phép qua firewall trên máy server nếu demo qua LAN.
+Bind address quyết định interface nào nhận kết nối. `127.0.0.1` chỉ phục vụ máy cục bộ; `0.0.0.0` lắng nghe trên mọi IPv4 interface. Địa chỉ `0.0.0.0` không phải địa chỉ để client kết nối. Khi quảng bá discovery ở chế độ `0.0.0.0`, server tự động tra bảng định tuyến để trả về IP của interface hướng tới chính client đang hỏi (trả `127.0.0.1` cho client loopback ngay cả khi có VPN/WSL), đồng thời dùng cờ `SO_EXCLUSIVEADDRUSE` trên Windows để tránh xung đột cổng ngầm; người vận hành cũng có thể cấu hình `--advertise-host` tường minh. Cổng mặc định TCP `37021` và UDP `37020` cần được cho phép qua firewall trên máy server nếu demo qua LAN.
 
 ### 4.2 Timeout, ngắt kết nối và phục hồi
 
@@ -162,7 +162,7 @@ Sơ đồ trạng thái chi tiết được duy trì tại [`docs/state-diagrams
 
 Server lưu tài khoản trong SQLite. Mật khẩu không được lưu nguyên văn; khi tạo tài khoản, hệ thống sinh salt ngẫu nhiên riêng và dùng `hashlib.scrypt` để dẫn xuất digest. Cấu hình mặc định trong `ScryptParams` là `n=16384`, `r=8`, `p=1`, độ dài digest 32 byte, salt 16 byte. Thông số được lưu theo chuỗi `kdf_params` để khi đăng nhập có thể diễn giải cách tạo digest.
 
-Khi xác thực, server nạp salt, digest và cấu hình KDF từ kho dữ liệu, dẫn xuất lại rồi so sánh bằng `hmac.compare_digest()`. Nếu tài khoản không tồn tại, code thực hiện phép dẫn xuất giả nhằm giảm chênh lệch thời gian dễ quan sát. Mã nguồn có giới hạn tham số KDF và semaphore giới hạn số phép tính đồng thời. Schema SQLite cũ được migrate để bổ sung trường cấu hình KDF; đăng nhập thành công có thể kích hoạt cập nhật hash nếu cấu hình lưu đã lỗi thời.
+Khi xác thực, server chuẩn hóa mật khẩu theo Unicode NFKC (có nhánh tương thích ngược cho tài khoản cũ), nạp salt, digest và cấu hình KDF từ kho dữ liệu, dẫn xuất lại rồi so sánh bằng `hmac.compare_digest()`. Nếu tài khoản không tồn tại, code thực hiện phép dẫn xuất giả nhằm giảm chênh lệch thời gian dễ quan sát. Mã nguồn có giới hạn tham số KDF (trần bộ nhớ 256 MiB), semaphore giới hạn số phép tính đồng thời, giới hạn lượt đăng ký theo IP, đóng kết nối khi đăng nhập sai liên tiếp và giới hạn tốc độ chat bằng token-bucket (`rate_limited`). Schema SQLite cũ được migrate để bổ sung trường cấu hình KDF; đăng nhập thành công có thể kích hoạt cập nhật hash nếu cấu hình lưu đã lỗi thời.
 
 Thông tin đăng nhập chỉ được gửi trong kết nối TLS. Log ứng dụng không nên chứa mật khẩu hoặc khóa riêng. SQLite có thể được lưu ở `data/users.sqlite3` theo cấu hình chạy; cơ sở dữ liệu runtime và chứng chỉ/khóa riêng không thuộc tài liệu công khai cần commit.
 
@@ -198,7 +198,7 @@ Kích thước và số chunk phải nhất quán. Tệp rỗng có 0 chunk và 
 4. **End và xác minh:** server kiểm tra tổng số chunk/kích thước đã chuyển, rồi thông báo kết thúc cho receiver. Receiver xác minh số byte, số chunk và SHA-256 so với manifest.
 5. **Hoàn tất:** nếu hợp lệ, receiver đổi tên tệp tạm thành tên đích bằng thao tác thay thế nguyên tử, chọn tên không trùng để tránh ghi đè tệp sẵn có, rồi gửi `file_ack`. Server thông báo trạng thái cuối cho sender.
 
-Offer, chunk rỗi và bước xác nhận có timeout riêng. Transfer có thể bị hủy bởi một trong hai phía; khi peer mất kết nối hoặc dữ liệu không hợp lệ, server phát trạng thái lỗi nếu còn session phía kia. Receiver đóng file handle và xóa `.part` khi hủy, timeout hoặc kiểm tra thất bại.
+Offer chưa quyết định, khoảng chờ giữa hai chunk và bước xác nhận cuối đều có timeout riêng. Transfer có thể bị hủy bởi một trong hai phía; khi peer mất kết nối hoặc dữ liệu không hợp lệ, server phát trạng thái lỗi ngoài phạm vi khóa điều phối nếu còn session phía kia. Receiver đóng file handle, xóa `.part` khi hủy/timeout/kiểm tra thất bại và bảo đảm gửi `file_ack` trên luồng riêng ngay cả khi hàng đợi bất đồng bộ đang bận.
 
 Ở tầng mạng, truyền tệp vẫn dùng cùng TCP/TLS session với chat và điều khiển. Mỗi chunk là một frame JSON riêng, dữ liệu nhị phân được Base64 hóa trước khi đưa vào JSON. Cách này tận dụng thứ tự và truyền lại của TCP, đồng thời giữ logic transfer rõ ràng ở tầng ứng dụng; đổi lại Base64 làm tăng kích thước dữ liệu và chunk quá lớn có thể cạnh tranh với các message khác trên cùng kết nối. Mã nguồn giới hạn chunk, file và frame để kiểm soát chi phí đó. Đây không phải UDP file transfer và không có giao thức resume sau khi reconnect; transfer bị hủy phải gửi lại từ đầu.
 
@@ -261,16 +261,16 @@ Bảng dưới đây tóm tắt nơi có thể kiểm tra từng nhóm yêu cầ
 | Discovery/heartbeat UDP | Request/announcement và datagram heartbeat phụ trợ | `src/collab/client/discovery.py`, `src/collab/server/discovery.py` |
 | Truyền tệp tin cậy | Manifest, chunk tuần tự, timeout, `.part`, xác minh SHA-256, cleanup | `src/collab/transfer/`, `src/collab/server/transfer_coordinator.py` |
 | CLI và trải nghiệm chạy | Lệnh tương tác, presence, chat, transfer progress | `src/collab/client/commands.py`, `README.md` |
-| Kiểm thử | 37 unit tests và 5 integration tests; trong đó có logout/cleanup/presence/ủy quyền sau logout và tải 12 client | `tests/unit/`, `tests/integration/` |
+| Kiểm thử | 53 unit tests và 5 integration tests (87.7% statement coverage); gồm định tuyến UDP, rate limit, timeout, logout/cleanup và tải 12 client | `tests/unit/`, `tests/integration/` |
 
 Ngày 11/11/2026, hai lệnh sau đã chạy trong môi trường làm việc này; cả hai đều kết thúc với mã thoát 0:
 
 | Bộ kiểm thử | Kết quả thực tế |
 |---|---|
-| `python -m unittest discover -s tests/unit -v` | 37 tests, ~2.6 giây, `OK` |
-| `python -m unittest discover -s tests/integration -v` | 5 tests, ~5.0 giây, `OK` |
+| `python -m unittest discover -s tests/unit -v` | 53 tests, ~3.6 giây, `OK` |
+| `python -m unittest discover -s tests/integration -v` | 5 tests, ~4.4 giây, `OK` |
 
-Các ca kiểm thử logout trong `tests/unit/test_server_flow.py` và `tests/unit/test_transfer_engine.py` kiểm tra response `logout_result` thành công, thu hồi tiến trình gửi/tệp `.part` cục bộ trên client, phát `presence_offline` cho client còn lại và từ chối request sau đăng xuất bằng mã lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Độ phủ câu lệnh (statement coverage) trên toàn bộ `src/collab/` đạt 81.1% (vượt ngưỡng 80%).
+Các ca kiểm thử đơn vị trong `tests/unit/` kiểm tra đóng khung giao thức, định tuyến UDP theo peer và khóa cổng độc quyền trên Windows, giới hạn thời gian trước xác thực (`auth_timeout = 60s`) và phiên nhàn rỗi (`idle_timeout = 90s`), giới hạn tốc độ xác thực/chat (`rate_limited`), chuẩn hóa Unicode (NFC/NFKC), giải phóng khóa điều phối khi truyền tệp, đảm bảo gửi `file_ack` và thu hồi tệp `.part` khi `/logout`. Integration suite đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Độ phủ câu lệnh (statement coverage) đo thực tế trên toàn bộ `src/collab/` đạt **87.7%** (`1933/2203` câu lệnh, vượt ngưỡng yêu cầu 80%).
 
 ## 12. Kết luận
 
