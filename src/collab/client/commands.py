@@ -56,8 +56,7 @@ class CommandLine:
             return
         kind = message.get("type")
         if kind == "connection_lost":
-            self.file_sender.abort_all("connection_lost")
-            self.file_receiver.abort_all("connection_lost")
+            self._abort_transfers("connection_lost")
             reason = _clean_display(message.get("reason", "Server đã đóng kết nối."))
             self._println(f"\n[Mất kết nối] {reason}")
             self.running = False
@@ -103,8 +102,7 @@ class CommandLine:
                     break
             except (ValueError, TransferError, ProtocolError, OSError) as exc:
                 self._println(f"Lỗi lệnh: {exc}")
-        self.file_sender.abort_all("client_closed")
-        self.file_receiver.abort_all("client_closed")
+        self._abort_transfers("client_closed")
         self.connection.close()
 
     def execute(self, line: str) -> None:
@@ -123,8 +121,7 @@ class CommandLine:
             self._no_args(command, args)
             result = self.connection.request("logout")
             if result.get("ok"):
-                self.file_sender.abort_all("logged_out")
-                self.file_receiver.abort_all("logged_out")
+                self._abort_transfers("logged_out")
                 self.users = []
                 self._println("Đã đăng xuất thành công.")
             else:
@@ -189,6 +186,10 @@ class CommandLine:
         else:
             tid = self._cancel_any(self._optional_id(command, args))
             self._println(f"[file] Đã hủy phiên truyền {tid[:8]}.")
+
+    def _abort_transfers(self, reason: str) -> None:
+        self.file_sender.abort_all(reason)
+        self.file_receiver.abort_all(reason)
 
     def _cancel_any(self, prefix: str | None) -> str:
         try:
