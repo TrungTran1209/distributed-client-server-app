@@ -61,6 +61,42 @@ class ReportAndDocsTests(unittest.TestCase):
         rendered_report = build_report.markdown_to_html(report_md)
         self.assertNotIn("](../", rendered_report)
 
+    def test_env_example_readme_team_plan_and_security_docs_are_synchronized(self):
+        env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+        readme_md = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        team_plan_md = (REPO_ROOT / "TEAM_PLAN.md").read_text(encoding="utf-8")
+        security_md = (REPO_ROOT / "docs" / "security.md").read_text(encoding="utf-8")
+        protocol_md = (REPO_ROOT / "docs" / "protocol.md").read_text(encoding="utf-8")
+        report_md = (REPO_ROOT / "docs" / "report" / "technical-report.md").read_text(encoding="utf-8")
+
+        # M6: .env.example matches actual defaults and notes no auto-dotenv loader
+        self.assertIn("37021", env_example)
+        self.assertIn("37020", env_example)
+        self.assertIn("COLLAB_DATABASE=data/users.sqlite3", env_example)
+        self.assertIn("COLLAB_IDLE_TIMEOUT=90", env_example)
+        self.assertIn("COLLAB_AUTH_TIMEOUT=60", env_example)
+        self.assertNotIn("8443", env_example)
+        self.assertNotIn("9999", env_example)
+        self.assertNotIn("COLLAB_DATA_DIR", env_example)
+        self.assertNotIn("certs/ca.crt", env_example)
+
+        # H1 + M6: README quickstart uses 127.0.0.1 for localhost cert and documents flags/env vars
+        self.assertIn("--host 127.0.0.1 --port 37021", readme_md)
+        self.assertIn("--idle-timeout", readme_md)
+        self.assertIn("--auth-timeout", readme_md)
+        self.assertIn("--database", readme_md)
+        self.assertIn("COLLAB_IDLE_TIMEOUT", readme_md)
+
+        # M7 + user-confirmed deadline: uniform 00:00 ngày 17/11/2026 in TEAM_PLAN.md
+        self.assertIn("00:00 ngày 17/11/2026", team_plan_md)
+        self.assertNotIn("16/11/2026", team_plan_md)
+
+        # M7 + M5 + M3: security.md, protocol.md, technical-report.md accuracy
+        self.assertIn("256 MiB", security_md)
+        self.assertIn("rate_limited", protocol_md)
+        self.assertIn("200 byte UTF-8", protocol_md)
+        self.assertNotIn("chunk rỗi", report_md)
+
 
 if __name__ == "__main__":
     unittest.main()
