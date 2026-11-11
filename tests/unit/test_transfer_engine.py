@@ -482,6 +482,192 @@ class TransferEngineUnitTests(unittest.TestCase):
         finally:
             server.stop()
 
+    def test_coordinator_size_mismatch_sends_outside_lock_and_enforces_per_pair_cap(self):
+        registry = SessionRegistry()
+        alice = Session("alice", object(), "127.0.0.1", 50001, str(uuid.uuid4()))
+        bob = Session("bob", object(), "127.0.0.1", 50002, str(uuid.uuid4()))
+        charlie = Session("charlie", object(), "127.0.0.1", 50003, str(uuid.uuid4()))
+        registry.add(alice)
+        registry.add(bob)
+        registry.add(charlie)
+
+        concurrent_succeeded = threading.Event()
+        coordinator_ref: list[TransferCoordinator] = []
+
+        def slow_send(session: Session, message: dict) -> None:
+            if message.get("type") == MessageType.FILE_STATUS and message.get("code") == "size_mismatch":
+                # Verify another thread can acquire coordinator._lock while slow_send is running!
+                def probe_lock():
+                    coordinator_ref[0].reap_expired()
+                    concurrent_succeeded.set()
+
+                probe = threading.Thread(target=probe_lock, daemon=True)
+                probe.start()
+                probe.join(timeout=0.5)
+
+        coordinator = TransferCoordinator(
+            registry,
+            slow_send,
+            max_active_per_user=4,
+            max_per_pair=2,
+        )
+        coordinator_ref.append(coordinator)
+
+        digest = hashlib.sha256(b"hello").hexdigest()
+        # Per-pair cap: alice -> bob allows 2 offers, 3rd offer to bob is rejected even though max_active_per_user=4,
+        # while charlie -> bob still succeeds!
+        for i in range(2):
+            ok_offer = coordinator.handle_request(
+                alice,
+                make_message(
+                    MessageType.FILE_OFFER,
+                    request_id=str(uuid.uuid4()),
+                    transfer_id=str(uuid.uuid4()),
+                    to="bob",
+                    filename=f"f{i}.txt",
+                    size=5,
+                    sha256=digest,
+                    chunk_size=1024,
+                    total_chunks=1,
+                ),
+            )
+            self.assertTrue(ok_offer["ok"])
+
+        third_same_pair = coordinator.handle_request(
+            alice,
+            make_message(
+                MessageType.FILE_OFFER,
+                request_id=str(uuid.uuid4()),
+                transfer_id=str(uuid.uuid4()),
+                to="bob",
+                filename="f3.txt",
+                size=5,
+                sha256=digest,
+                chunk_size=1024,
+                total_chunks=1,
+            ),
+        )
+        self.assertFalse(third_same_pair["ok"])
+        self.assertEqual(third_same_pair["code"], "too_many_transfers")
+
+        tid_charlie = str(uuid.uuid4())
+        charlie_offer = coordinator.handle_request(
+            charlie,
+            make_message(
+                MessageType.FILE_OFFER,
+                request_id=str(uuid.uuid4()),
+                transfer_id=tid_charlie,
+                to="bob",
+                filename="from_charlie.txt",
+                size=5,
+                sha256=digest,
+                chunk_size=1024,
+                total_chunks=1,
+            ),
+        )
+        self.assertTrue(charlie_offer["ok"])
+
+        # Accept charlie's offer, then send premature FILE_END (0 chunks relayed -> size_mismatch)
+        coordinator.handle_request(
+            bob,
+            make_message(MessageType.FILE_ACCEPT, request_id=str(uuid.uuid4()), transfer_id=tid_charlie),
+        )
+        end_resp = coordinator.handle_request(
+            charlie,
+            make_message(
+                MessageType.FILE_END,
+                request_id=str(uuid.uuid4()),
+                transfer_id=tid_charlie,
+                size=5,
+                sha256=digest,
+            ),
+        )
+        self.assertFalse(end_resp["ok"])
+        self.assertEqual(end_resp["code"], "size_mismatch")
+        self.assertTrue(
+            concurrent_succeeded.is_set(),
+            "TransferCoordinator held self._lock while calling self.send() on size_mismatch!",
+        )
+
+    def test_receiver_delivers_file_ack_even_when_async_gate_is_saturated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ack_sent = threading.Event()
+
+            def fake_request(kind: str, *, timeout: float = 15.0, **fields):
+                if kind == MessageType.FILE_ACK:
+                    ack_sent.set()
+                return {"v": 1, "type": f"{kind}_result", "ok": True}
+
+            receiver = FileReceiver(fake_request, download_dir=tmp)
+            # Exhaust every permit in _async_gate to simulate burst saturation
+            acquired = 0
+            while receiver._async_gate.acquire(blocking=False):
+                acquired += 1
+            try:
+                payload = b"guaranteed ack payload"
+                digest = hashlib.sha256(payload).hexdigest()
+                tid = str(uuid.uuid4())
+                receiver.handle_event(
+                    {
+                        "v": 1,
+                        "type": MessageType.FILE_OFFER_EVENT,
+                        "transfer_id": tid,
+                        "from": "alice",
+                        "filename": "important.bin",
+                        "size": len(payload),
+                        "sha256": digest,
+                        "chunk_size": 1024,
+                        "total_chunks": 1,
+                        "expires_in_sec": 60,
+                    }
+                )
+                receiver.accept(tid[:8])
+                receiver.handle_event(
+                    {
+                        "v": 1,
+                        "type": MessageType.FILE_CHUNK_EVENT,
+                        "transfer_id": tid,
+                        "from": "alice",
+                        "index": 0,
+                        "data": base64.b64encode(payload).decode("ascii"),
+                    }
+                )
+                receiver.handle_event(
+                    {
+                        "v": 1,
+                        "type": MessageType.FILE_END_EVENT,
+                        "transfer_id": tid,
+                        "from": "alice",
+                        "size": len(payload),
+                        "sha256": digest,
+                        "total_chunks": 1,
+                    }
+                )
+                self.assertTrue(
+                    ack_sent.wait(1.5),
+                    "FILE_ACK was dropped when _async_gate was saturated!",
+                )
+            finally:
+                for _ in range(acquired):
+                    receiver._async_gate.release()
+
+    def test_cli_connection_lost_during_input_exits_without_executing_stale_line(self):
+        conn = FakeConnection()
+        out = io.StringIO()
+        cli_holder: list[CommandLine] = []
+
+        def fake_input(prompt: str = "") -> str:
+            # Simulate asynchronous disconnect arriving while blocked on input()
+            conn.connected = False
+            cli_holder[0].show_event({"type": "connection_lost", "reason": "server closed"})
+            return "/all stale message after disconnect"
+
+        cli = CommandLine(conn, output=out, input_fn=fake_input)
+        cli_holder.append(cli)
+        cli.run()
+        self.assertEqual(conn.requests, [])
+        self.assertIn("Enter", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
