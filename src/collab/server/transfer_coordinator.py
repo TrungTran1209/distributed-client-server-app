@@ -60,6 +60,7 @@ class TransferCoordinator:
         max_file_size: int = MAX_FILE_SIZE,
         max_chunk_size: int = MAX_CHUNK_SIZE,
         max_active_per_user: int = 3,
+        max_per_pair: int | None = None,
         max_total_transfers: int = 64,
     ) -> None:
         self.sessions = sessions
@@ -70,6 +71,11 @@ class TransferCoordinator:
         self.max_file_size = max_file_size
         self.max_chunk_size = max_chunk_size
         self.max_active_per_user = max_active_per_user
+        self.max_per_pair = (
+            max(1, int(max_per_pair))
+            if max_per_pair is not None
+            else max(1, min(2, max_active_per_user))
+        )
         self.max_total_transfers = max_total_transfers
         self._lock = threading.RLock()
         self._transfers: dict[str, _RelaySession] = {}
@@ -207,7 +213,14 @@ class TransferCoordinator:
                 return "server_busy"
             sender_count = sum(1 for r in self._transfers.values() if r.sender == sender)
             recipient_count = sum(1 for r in self._transfers.values() if r.recipient == recipient)
-            if sender_count >= self.max_active_per_user or recipient_count >= self.max_active_per_user * 2:
+            pair_count = sum(
+                1 for r in self._transfers.values() if r.sender == sender and r.recipient == recipient
+            )
+            if (
+                sender_count >= self.max_active_per_user
+                or recipient_count >= self.max_active_per_user * 2
+                or pair_count >= self.max_per_pair
+            ):
                 return "too_many_transfers"
             self._transfers[manifest.transfer_id] = _RelaySession(
                 manifest=manifest,
@@ -355,6 +368,7 @@ class TransferCoordinator:
         if err is not None:
             return err
 
+        mismatch_peer: Session | None = None
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.sender != session.username or rel.state != "accepted":
@@ -368,17 +382,21 @@ class TransferCoordinator:
             )
             if not is_complete:
                 self._transfers.pop(tid, None)
-                if recipient_session is not None:
-                    self.send(
-                        recipient_session,
-                        make_message(MessageType.FILE_STATUS, transfer_id=tid, ok=False, code="size_mismatch"),
-                    )
-                return _fail(MessageType.FILE_RESULT, request_id, "size_mismatch")
-            if recipient_session is None:
+                mismatch_peer = recipient_session
+            elif recipient_session is None:
                 self._transfers.pop(tid, None)
                 return _fail(MessageType.FILE_RESULT, request_id, "peer_disconnected")
-            rel.state = "verifying"
-            rel.updated_at = time.monotonic()
+            else:
+                rel.state = "verifying"
+                rel.updated_at = time.monotonic()
+
+        if not is_complete:
+            if mismatch_peer is not None:
+                self.send(
+                    mismatch_peer,
+                    make_message(MessageType.FILE_STATUS, transfer_id=tid, ok=False, code="size_mismatch"),
+                )
+            return _fail(MessageType.FILE_RESULT, request_id, "size_mismatch")
 
         self.send(
             recipient_session,

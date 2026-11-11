@@ -50,8 +50,8 @@ stateDiagram-v2
     Unauthenticated --> Online: login đúng -> thêm vào SessionRegistry
     Online --> Online: chat_send, file_*, ping
     Online --> Unauthenticated: logout -> thu hồi phiên file + phát presence_offline
-    Unauthenticated --> Closed: EOF / lỗi mạng / idle timeout
-    Online --> Closed: EOF / lỗi mạng / idle timeout 300s -> thu hồi phiên file + phát presence_offline
+    Unauthenticated --> Closed: EOF / lỗi mạng / auth timeout 60s / vượt ngưỡng sai mật khẩu
+    Online --> Closed: EOF / lỗi mạng / idle timeout 90s -> thu hồi phiên file + phát presence_offline
     Closed --> [*]
 ```
 

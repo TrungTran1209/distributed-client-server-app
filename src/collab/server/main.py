@@ -41,8 +41,14 @@ def main() -> None:
     parser.add_argument(
         "--idle-timeout",
         type=int,
-        default=int(os.environ.get("COLLAB_IDLE_TIMEOUT", "300")),
-        help="idle TCP session timeout in seconds (default: 300)",
+        default=int(os.environ.get("COLLAB_IDLE_TIMEOUT", "90")),
+        help="idle authenticated TCP session timeout in seconds (default: 90)",
+    )
+    parser.add_argument(
+        "--auth-timeout",
+        type=int,
+        default=int(os.environ.get("COLLAB_AUTH_TIMEOUT", "60")),
+        help="pre-authentication deadline in seconds (default: 60)",
     )
     args = parser.parse_args()
 
@@ -54,6 +60,7 @@ def main() -> None:
         tls,
         AuthService(UserStore(args.database)),
         idle_timeout=args.idle_timeout,
+        auth_timeout=args.auth_timeout,
     )
     discovery = DiscoveryServer(
         args.port, bind_host=args.host, udp_port=args.udp_port,

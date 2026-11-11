@@ -138,7 +138,7 @@ Client tạo TCP connection, thực hiện TLS handshake, gửi `hello` và ch�
 
 Server áp dụng timeout cho TLS handshake và giai đoạn chờ `hello`. Sau khi trao đổi `hello`/`welcome`, server xử lý các request trên worker của kết nối. Khi đăng nhập thành công, `SessionRegistry` liên kết username với phiên đang hoạt động và địa chỉ IP/cổng nguồn của socket như server quan sát được (qua NAT, đây có thể là endpoint đã được dịch). Server gửi danh sách user hiện tại cho client mới và phát `presence_online` cho các client khác. Đăng xuất hoặc mất kết nối sẽ thu hồi session, dừng các transfer liên quan và phát `presence_offline`.
 
-TCP `ping`/`pong` được dùng làm keepalive ứng dụng; server có idle timeout mặc định 300 giây (cấu hình được qua `--idle-timeout`). Đây là cơ chế gắn với phiên TCP. UDP heartbeat không đăng nhập user, không cập nhật `SessionRegistry` và không thay thế keepalive TCP.
+TCP `ping`/`pong` được dùng làm keepalive ứng dụng (mỗi 30 giây); server áp dụng thời hạn trước xác thực mặc định 60 giây (`--auth-timeout`) và idle timeout cho phiên đã đăng nhập mặc định 90 giây (`--idle-timeout`, tương đương 3 chu kỳ heartbeat). Đây là cơ chế gắn với phiên TCP. UDP heartbeat không đăng nhập user, không cập nhật `SessionRegistry` và không thay thế keepalive TCP.
 
 ### 4.1 Bind, listen, accept và giới hạn kết nối
 

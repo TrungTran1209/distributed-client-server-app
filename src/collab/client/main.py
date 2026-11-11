@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from collab.common.tls import create_client_context
-from .commands import CommandLine
+from .commands import CommandLine, _clean_display
 from .connection import ClientConnection, ClientConnectionError
 from .discovery import UDPHeartbeat, discover_server
 
@@ -57,7 +57,7 @@ def main() -> None:
         )
         if announcement:
             host, port = announcement["host"], announcement["tcp_port"]
-            print(f"Tìm thấy {announcement['server_name']} tại {host}:{port}")
+            print(f"Tìm thấy {_clean_display(announcement['server_name'])} tại {_clean_display(host)}:{port}")
         elif not host:
             parser.error("không tìm thấy server UDP; chỉ định --host hoặc bật server discovery")
         else:

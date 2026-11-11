@@ -47,7 +47,7 @@ flowchart LR
   - `tls.py`: khởi tạo `SSLContext` tối thiểu TLS 1.2 cho server và client (bật kiểm tra chứng chỉ CA và hostname/IP mặc định).
   - `crypto.py`: dẫn xuất và xác minh mật khẩu bằng `hashlib.scrypt`, so sánh thời gian hằng số (`hmac.compare_digest`) và quản lý định dạng phiên bản tham số `ScryptParams` (`scrypt$v=1$n=16384$r=8$p=1$dklen=32`).
 - **Máy chủ (`src/collab/server/`):**
-  - `server.py`: vòng lặp `accept()` đa luồng (mỗi client một worker thread, giới hạn cấu hình mặc định 100 client đồng thời), kiểm soát bắt tay TLS/ứng dụng và thu dọn phiên nhàn rỗi (`idle_timeout = 300s`).
+  - `server.py`: vòng lặp `accept()` đa luồng (mỗi client một worker thread, giới hạn cấu hình mặc định 100 client đồng thời), kiểm soát bắt tay TLS/ứng dụng (`auth_timeout = 60s`), giới hạn tốc độ xác thực/chat và thu dọn phiên nhàn rỗi (`idle_timeout = 90s`).
   - `auth.py`, `user_store.py`: lưu trữ tài khoản an toàn trong SQLite chế độ WAL, tự động nâng cấp lại hash mật khẩu khi cấu hình KDF tăng cường.
   - `sessions.py`, `router.py`: theo dõi người dùng online kèm địa chỉ IP/cổng TCP nguồn thực tế, phát sự kiện `presence_online`/`presence_offline` và định tuyến chat broadcast/direct.
   - `transfer_coordinator.py`: máy trạng thái điều phối truyền tệp (`offered` -> `accepted` -> `verifying`), kiểm tra thứ tự chunk và chuyển tiếp luồng dữ liệu tới người nhận với chi phí bộ nhớ `O(1)` trên server, tự hủy phiên treo hoặc đứt kết nối.

@@ -58,7 +58,7 @@ class CommandLine:
         if kind == "connection_lost":
             self._abort_transfers("connection_lost")
             reason = _clean_display(message.get("reason", "Server đã đóng kết nối."))
-            self._println(f"\n[Mất kết nối] {reason}")
+            self._println(f"\n[Mất kết nối] {reason} (nhấn Enter để thoát)")
             self.running = False
             return
 
@@ -93,6 +93,8 @@ class CommandLine:
                 line = self.input_fn("collab> ")
             except (EOFError, KeyboardInterrupt):
                 self._println("")
+                break
+            if not self.running or not self.connection.connected:
                 break
             try:
                 self.execute(line)

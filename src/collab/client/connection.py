@@ -39,6 +39,7 @@ class ClientConnection:
         self._state_lock = threading.Lock()
         self._pending: dict[str, tuple[threading.Event, dict[str, Any] | None]] = {}
         self._closed = threading.Event()
+        self._closing = threading.Event()
         self._keepalive_stop = threading.Event()
         self._reader: threading.Thread | None = None
         self._keepalive: threading.Thread | None = None
@@ -156,7 +157,7 @@ class ClientConnection:
             self._pending.clear()
         for event, _ in pending:
             event.set()
-        if self.on_event:
+        if self.on_event and not self._closing.is_set():
             try:
                 self.on_event({"type": "connection_lost", "reason": str(cause)})
             except Exception:  # noqa: BLE001
@@ -165,6 +166,7 @@ class ClientConnection:
     def close(self) -> None:
         if self._closed.is_set():
             return
+        self._closing.set()
         self._keepalive_stop.set()
         try:
             self.request("logout", timeout=3)

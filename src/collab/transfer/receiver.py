@@ -158,7 +158,7 @@ class FileReceiver:
         """Abort an in-progress incoming transfer and delete its `.part` file."""
         tid = self._match_receiving_id(transfer_id_or_prefix)
         self._cleanup_receive(tid)
-        self._async_request(MessageType.FILE_CANCEL, transfer_id=tid, reason="cancelled_by_receiver")
+        self._critical_async_request(MessageType.FILE_CANCEL, transfer_id=tid, reason="cancelled_by_receiver")
         return tid
 
     def reap_expired(self) -> list[str]:
@@ -306,12 +306,12 @@ class FileReceiver:
         except (TransferError, OSError) as exc:
             code = exc.code if isinstance(exc, TransferError) else "io_error"
             _safe_unlink(active.part_path)
-            self._async_request(MessageType.FILE_ACK, transfer_id=tid, ok=False, code=code)
+            self._critical_async_request(MessageType.FILE_ACK, transfer_id=tid, ok=False, code=code)
             self._notify_complete(tid, False, {"ok": False, "transfer_id": tid, "code": code, "message": str(exc)})
             return
 
         actual_hash = active.hasher.hexdigest()
-        self._async_request(MessageType.FILE_ACK, transfer_id=tid, ok=True, sha256=actual_hash)
+        self._critical_async_request(MessageType.FILE_ACK, transfer_id=tid, ok=True, sha256=actual_hash)
         self._notify_complete(
             tid,
             True,
@@ -425,6 +425,17 @@ class FileReceiver:
                 pass
 
         self._spawn_bounded(_send)
+
+    def _critical_async_request(self, kind: str, **fields: Any) -> None:
+        """Send a post-accept control message (ACK/CANCEL) without dropping under gate load."""
+
+        def _send() -> None:
+            try:
+                self._request(kind, timeout=10.0, **fields)
+            except Exception:  # noqa: BLE001
+                pass
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def _spawn_bounded(self, fn: Callable[[], None]) -> None:
         if not self._async_gate.acquire(blocking=False):

@@ -17,6 +17,7 @@ class Session:
     session_id: str
     send_lock: threading.Lock = field(default_factory=threading.Lock)
     last_seen: float = field(default_factory=time.monotonic)
+    send_started_at: float | None = None
 
 
 class SessionRegistry:
@@ -63,3 +64,12 @@ class SessionRegistry:
         cutoff = time.monotonic() - idle_seconds
         with self._lock:
             return [s for s in self._by_username.values() if s.last_seen < cutoff]
+
+    def stalled_sends(self, send_timeout: float) -> list[Session]:
+        cutoff = time.monotonic() - send_timeout
+        with self._lock:
+            return [
+                s
+                for s in self._by_username.values()
+                if s.send_started_at is not None and s.send_started_at < cutoff
+            ]
