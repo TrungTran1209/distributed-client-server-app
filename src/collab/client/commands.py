@@ -122,8 +122,13 @@ class CommandLine:
         elif command == "/logout":
             self._no_args(command, args)
             result = self.connection.request("logout")
-            self.users = []
-            self._println("Đã đăng xuất thành công." if result.get("ok") else "Đăng xuất thất bại.")
+            if result.get("ok"):
+                self.file_sender.abort_all("logged_out")
+                self.file_receiver.abort_all("logged_out")
+                self.users = []
+                self._println("Đã đăng xuất thành công.")
+            else:
+                self._println(f"Đăng xuất thất bại: {_clean_display(result.get('code', 'failed'))}")
         elif command in {"/users", "/all", "/msg"}:
             self._exec_chat(command, args)
         elif command in {"/file", "/accept", "/reject", "/cancel"}:

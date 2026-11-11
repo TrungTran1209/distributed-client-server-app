@@ -150,8 +150,15 @@ def _inline_md(text: str) -> str:
         code_spans.append(f"<code>{html.escape(match.group(1))}</code>")
         return f"\x00CODE{idx}\x00"
 
+    def _render_link(match: re.Match[str]) -> str:
+        label, href = match.group(1), match.group(2).strip()
+        if href.startswith(("http://", "https://")):
+            return f'<a href="{href}">{label}</a>'
+        return label
+
     stashed = re.sub(r"`([^`]+)`", _stash_code, text)
     escaped = html.escape(stashed)
+    escaped = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", _render_link, escaped)
     escaped = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"\*([^*]+)\*", r"<em>\1</em>", escaped)
     for idx, span_html in enumerate(code_spans):
@@ -329,6 +336,7 @@ def markdown_to_html(md_text: str) -> str:
     page-break-after: avoid;
   }}
   p, li {{ text-align: justify; }}
+  a {{ color: #1d4ed8; text-decoration: none; }}
   ul, ol {{ margin-top: 4px; margin-bottom: 8px; padding-left: 20px; }}
   li {{ margin-bottom: 3px; }}
   code {{

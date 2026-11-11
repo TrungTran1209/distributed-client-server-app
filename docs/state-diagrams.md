@@ -35,7 +35,7 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> AcceptedTCP
     state "Socket TCP được accept" as AcceptedTCP
-    state "Bắt tay TLS (10s)" as TLSHandshake
+    state "Bắt tay TLS (15s)" as TLSHandshake
     state "Chờ hello" as AwaitHello
     state "Chưa xác thực" as Unauthenticated
     state "Đang online" as Online
@@ -43,7 +43,7 @@ stateDiagram-v2
 
     AcceptedTCP --> TLSHandshake: wrap_socket(server_side=True)
     TLSHandshake --> AwaitHello: TLS thành công
-    TLSHandshake --> Closed: Lỗi TLS / timeout 10s
+    TLSHandshake --> Closed: Lỗi TLS / timeout 15s
     AwaitHello --> Unauthenticated: hello -> gửi welcome
     AwaitHello --> Closed: Sai message đầu / frame lỗi
     Unauthenticated --> Unauthenticated: register / login sai / ping
@@ -51,7 +51,7 @@ stateDiagram-v2
     Online --> Online: chat_send, file_*, ping
     Online --> Unauthenticated: logout -> thu hồi phiên file + phát presence_offline
     Unauthenticated --> Closed: EOF / lỗi mạng / idle timeout
-    Online --> Closed: EOF / lỗi mạng / idle timeout 90s -> thu hồi phiên file + phát presence_offline
+    Online --> Closed: EOF / lỗi mạng / idle timeout 300s -> thu hồi phiên file + phát presence_offline
     Closed --> [*]
 ```
 

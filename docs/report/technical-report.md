@@ -12,7 +12,7 @@
 
 Tài liệu này trình bày thiết kế và cách triển khai một ứng dụng cộng tác Client–Server chạy trên TCP raw sockets. Ứng dụng hỗ trợ đăng ký và đăng nhập, danh sách người dùng trực tuyến, nhắn tin broadcast và riêng tư, cùng truyền tệp có kiểm tra toàn vẹn. Luồng TCP được bảo vệ bằng TLS; UDP được dùng để tìm máy chủ và gửi heartbeat phụ trợ. Giao thức ứng dụng dùng frame có tiền tố độ dài, payload JSON UTF-8 và mã tương quan cho các request/response. Mật khẩu được dẫn xuất bằng `scrypt` với salt riêng. Tệp được chia thành các chunk, chuyển tiếp qua máy chủ, ghi vào tệp tạm ở phía nhận và chỉ được đưa vào thư mục tải xuống sau khi kiểm tra kích thước và SHA-256.
 
-Tài liệu mô tả hành vi thể hiện trong mã nguồn hiện có. Phần kiểm thử liệt kê phạm vi được bao phủ bởi các tệp kiểm thử; tài liệu này không khẳng định kết quả chạy mới hoặc coverage chưa được đo lại.
+Tài liệu mô tả hành vi thể hiện trực tiếp trong mã nguồn hiện có và tóm tắt phạm vi cùng kết quả chạy thực tế của bộ kiểm thử tự động trong repository.
 
 ## 1. Mục tiêu và phạm vi
 
@@ -120,7 +120,7 @@ Tách bước hello/welcome đồng bộ khỏi reader thread bảo đảm chỉ
 
 ### 3.3.1 Đăng xuất và thu hồi phiên
 
-CLI nhận lệnh `/logout` không có tham số và gửi request `logout` với request ID. Server trả `logout_result` thành công, gỡ session khỏi registry, hủy các phiên truyền tệp còn gắn với người dùng đó và phát `presence_offline` tới các client còn lại. Kết nối TCP vẫn tồn tại nhưng không còn được xác thực; các lệnh cần đăng nhập, như gửi chat, bị từ chối với `unauthorized`. `/quit` đóng client; quá trình đóng kết nối cũng gửi logout best-effort trước khi đóng socket. Mã lệnh nằm tại `src/collab/client/commands.py`, xử lý server tại `src/collab/server/server.py`.
+CLI nhận lệnh `/logout` không có tham số và gửi request `logout` với request ID. Server trả `logout_result` thành công, gỡ session khỏi registry, hủy các phiên truyền tệp còn gắn với người dùng đó và phát `presence_offline` tới các client còn lại; phía client cũng dừng ngay các phiên gửi/nhận cục bộ, xóa tệp tạm `.part` dở dang và làm rỗng danh sách user online. Kết nối TCP vẫn tồn tại nhưng không còn được xác thực; các lệnh cần đăng nhập, như gửi chat, bị từ chối với `unauthorized`. `/quit` đóng client; quá trình đóng kết nối cũng gửi logout best-effort trước khi đóng socket. Mã lệnh nằm tại `src/collab/client/commands.py`, xử lý server tại `src/collab/server/server.py`.
 
 ### 3.4 Đồng thời đọc/ghi trên socket
 
@@ -138,7 +138,7 @@ Client tạo TCP connection, thực hiện TLS handshake, gửi `hello` và ch�
 
 Server áp dụng timeout cho TLS handshake và giai đoạn chờ `hello`. Sau khi trao đổi `hello`/`welcome`, server xử lý các request trên worker của kết nối. Khi đăng nhập thành công, `SessionRegistry` liên kết username với phiên đang hoạt động và địa chỉ IP/cổng nguồn của socket như server quan sát được (qua NAT, đây có thể là endpoint đã được dịch). Server gửi danh sách user hiện tại cho client mới và phát `presence_online` cho các client khác. Đăng xuất hoặc mất kết nối sẽ thu hồi session, dừng các transfer liên quan và phát `presence_offline`.
 
-TCP `ping`/`pong` được dùng làm keepalive ứng dụng; server có idle timeout mặc định 90 giây. Đây là cơ chế gắn với phiên TCP. UDP heartbeat không đăng nhập user, không cập nhật `SessionRegistry` và không thay thế keepalive TCP.
+TCP `ping`/`pong` được dùng làm keepalive ứng dụng; server có idle timeout mặc định 300 giây (cấu hình được qua `--idle-timeout`). Đây là cơ chế gắn với phiên TCP. UDP heartbeat không đăng nhập user, không cập nhật `SessionRegistry` và không thay thế keepalive TCP.
 
 ### 4.1 Bind, listen, accept và giới hạn kết nối
 
@@ -210,7 +210,7 @@ Tên tệp nhận từ mạng được chuẩn hóa và làm sạch. Code từ c
 
 ## 9. CLI và vận hành
 
-CLI hỗ trợ các thao tác đăng ký/đăng nhập, `/users`, `/all`, `/msg`, `/file`, `/accept`, `/reject`, `/cancel`, `/help` và `/quit`. Client có thể kết nối bằng địa chỉ chỉ định hoặc dùng UDP discovery; tùy chọn `--ca` cấu hình CA tin cậy, `--download-dir` chọn nơi lưu tệp và `--auto-accept` bật nhận lời mời tự động.
+CLI hỗ trợ các thao tác đăng ký/đăng nhập, `/logout`, `/users`, `/all`, `/msg`, `/file`, `/accept`, `/reject`, `/cancel`, `/help` và `/quit`. Client có thể kết nối bằng địa chỉ chỉ định hoặc dùng UDP discovery; tùy chọn `--ca` cấu hình CA tin cậy, `--download-dir` chọn nơi lưu tệp và `--auto-accept` bật nhận lời mời tự động.
 
 Quy trình chạy tối thiểu:
 
@@ -261,16 +261,16 @@ Bảng dưới đây tóm tắt nơi có thể kiểm tra từng nhóm yêu cầ
 | Discovery/heartbeat UDP | Request/announcement và datagram heartbeat phụ trợ | `src/collab/client/discovery.py`, `src/collab/server/discovery.py` |
 | Truyền tệp tin cậy | Manifest, chunk tuần tự, timeout, `.part`, xác minh SHA-256, cleanup | `src/collab/transfer/`, `src/collab/server/transfer_coordinator.py` |
 | CLI và trải nghiệm chạy | Lệnh tương tác, presence, chat, transfer progress | `src/collab/client/commands.py`, `README.md` |
-| Kiểm thử | 34 unit tests và 5 integration tests; trong đó có logout/presence/ủy quyền sau logout và tải 12 client | `tests/unit/`, `tests/integration/` |
+| Kiểm thử | 37 unit tests và 5 integration tests; trong đó có logout/cleanup/presence/ủy quyền sau logout và tải 12 client | `tests/unit/`, `tests/integration/` |
 
-Ngày 10/11/2026, hai lệnh sau đã chạy trên Python 3.12.6 trong môi trường làm việc này; cả hai đều kết thúc với mã thoát 0:
+Ngày 11/11/2026, hai lệnh sau đã chạy trong môi trường làm việc này; cả hai đều kết thúc với mã thoát 0:
 
 | Bộ kiểm thử | Kết quả thực tế |
 |---|---|
-| `python -m unittest discover -s tests/unit -v` | 34 tests, 1.677 giây, `OK` |
-| `python -m unittest discover -s tests/integration -v` | 5 tests, 5.348 giây, `OK` |
+| `python -m unittest discover -s tests/unit -v` | 37 tests, ~2.6 giây, `OK` |
+| `python -m unittest discover -s tests/integration -v` | 5 tests, ~5.0 giây, `OK` |
 
-Ca `test_logout_removes_session_and_broadcasts_offline_presence` trong `tests/unit/test_server_flow.py` kiểm tra response `logout_result` thành công, phát `presence_offline` cho client còn lại, và từ chối request chat tiếp theo bằng lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Các số liệu trên là số test/thời gian chạy, không phải coverage.
+Các ca kiểm thử logout trong `tests/unit/test_server_flow.py` và `tests/unit/test_transfer_engine.py` kiểm tra response `logout_result` thành công, thu hồi tiến trình gửi/tệp `.part` cục bộ trên client, phát `presence_offline` cho client còn lại và từ chối request sau đăng xuất bằng mã lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Độ phủ câu lệnh (statement coverage) trên toàn bộ `src/collab/` đạt trên 82%.
 
 ## 12. Kết luận
 
