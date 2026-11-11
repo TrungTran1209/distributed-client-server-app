@@ -270,7 +270,7 @@ Ngày 11/11/2026, hai lệnh sau đã chạy trong môi trường làm việc n�
 | `python -m unittest discover -s tests/unit -v` | 37 tests, ~2.6 giây, `OK` |
 | `python -m unittest discover -s tests/integration -v` | 5 tests, ~5.0 giây, `OK` |
 
-Các ca kiểm thử logout trong `tests/unit/test_server_flow.py` và `tests/unit/test_transfer_engine.py` kiểm tra response `logout_result` thành công, thu hồi tiến trình gửi/tệp `.part` cục bộ trên client, phát `presence_offline` cho client còn lại và từ chối request sau đăng xuất bằng mã lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Độ phủ câu lệnh (statement coverage) trên toàn bộ `src/collab/` đạt trên 82%.
+Các ca kiểm thử logout trong `tests/unit/test_server_flow.py` và `tests/unit/test_transfer_engine.py` kiểm tra response `logout_result` thành công, thu hồi tiến trình gửi/tệp `.part` cục bộ trên client, phát `presence_offline` cho client còn lại và từ chối request sau đăng xuất bằng mã lỗi `unauthorized`. Integration suite cũng đạt các kịch bản TLS với chứng chỉ không tin cậy, truyền nhiều chunk/tệp rỗng, từ chối và timeout, ngắt kết nối giữa truyền tệp, cùng 12 client đồng thời. Độ phủ câu lệnh (statement coverage) trên toàn bộ `src/collab/` đạt 81.1% (vượt ngưỡng 80%).
 
 ## 12. Kết luận
 

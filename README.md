@@ -125,7 +125,7 @@ python -m unittest discover -s tests/integration -v
 python docs/report/build_report.py
 ```
 
-Kết quả chạy thực tế gần nhất (11/11/2026): **37 unit tests và 5 integration tests đều đạt (>82% coverage)**. Unit test luồng server và CLI bao gồm `/logout`: dọn sạch phiên truyền tệp/tệp tạm `.part` cục bộ, client khác nhận `presence_offline`, và yêu cầu chat sau đăng xuất bị từ chối (`unauthorized`).
+Kết quả chạy thực tế gần nhất (11/11/2026): **37 unit tests và 5 integration tests đều đạt (81.1% coverage)**. Unit test luồng server và CLI bao gồm `/logout`: dọn sạch phiên truyền tệp/tệp tạm `.part` cục bộ, client khác nhận `presence_offline`, và yêu cầu chat sau đăng xuất bị từ chối (`unauthorized`).
 
 ## Tài liệu thiết kế chi tiết
 
