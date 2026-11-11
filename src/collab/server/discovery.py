@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import threading
 import uuid
@@ -36,8 +37,16 @@ class DiscoveryServer:
             return
         self._stop.clear()
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        sock.bind((self.bind_host, self.udp_port))
+        excl_opt = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+        if os.name == "nt" and excl_opt is not None:
+            sock.setsockopt(socket.SOL_SOCKET, excl_opt, 1)
+        elif os.name != "nt":
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((self.bind_host, self.udp_port))
+        except OSError:
+            sock.close()
+            raise
         sock.settimeout(1)
         self._socket = sock
         self._thread = threading.Thread(target=self.serve_forever, name="udp-discovery", daemon=True)
@@ -68,7 +77,7 @@ class DiscoveryServer:
                     request = decode_datagram(data)
                     kind = request["type"]
                     if kind == "discover":
-                        host = self._announcement_host()
+                        host = self._announcement_host(address[0])
                         response = {
                             "v": 1, "type": "server_announcement",
                             "request_id": request["request_id"], "server_id": self.server_id,
@@ -90,12 +99,29 @@ class DiscoveryServer:
             if self._socket is sock:
                 self._socket = None
 
-    def _announcement_host(self) -> str:
+    def _announcement_host(self, peer_host: str | None = None) -> str:
         if self.advertise_host:
             return self.advertise_host
         if self.bind_host not in {"0.0.0.0", ""}:
             return self.bind_host
+        if peer_host:
+            if peer_host == "localhost" or peer_host.startswith("127."):
+                return "127.0.0.1"
+            routed = self._route_ip_for_peer(peer_host)
+            if routed:
+                return routed
         return self._get_local_ip()
+
+    @staticmethod
+    def _route_ip_for_peer(peer_host: str) -> str | None:
+        """Return the local IPv4 interface routed toward `peer_host` without sending packets."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as route_socket:
+                route_socket.connect((peer_host, 80))
+                local_ip = route_socket.getsockname()[0]
+                return local_ip if local_ip and local_ip != "0.0.0.0" else None
+        except OSError:
+            return None
 
     @staticmethod
     def _get_local_ip() -> str:
