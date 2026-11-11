@@ -409,6 +409,61 @@ class TransferEngineUnitTests(unittest.TestCase):
             cli.show_event({"type": "connection_lost", "reason": "test drop"})
             self.assertFalse(cli.running)
 
+    def test_cli_logout_aborts_local_transfers_and_reports_error_code(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sample = Path(tmp) / "outgoing.bin"
+            sample.write_bytes(b"payload-before-logout")
+            dl_dir = Path(tmp) / "downloads"
+
+            conn = FakeConnection()
+            out = io.StringIO()
+            cli = CommandLine(conn, output=out, download_dir=dl_dir)
+            cli.users = [{"username": "alice", "host": "127.0.0.1", "port": 40001}]
+            try:
+                # Start an outgoing offer and accept an incoming offer (.part file open on disk)
+                outgoing_manifest = cli.file_sender.start_send(sample, "bob")
+                incoming_tid = str(uuid.uuid4())
+                cli.show_event(
+                    {
+                        "v": 1,
+                        "type": MessageType.FILE_OFFER_EVENT,
+                        "transfer_id": incoming_tid,
+                        "from": "bob",
+                        "filename": "incoming.bin",
+                        "size": 64,
+                        "sha256": hashlib.sha256(b"x" * 64).hexdigest(),
+                        "chunk_size": 64,
+                        "total_chunks": 1,
+                        "expires_in_sec": 60,
+                    }
+                )
+                cli.execute(f"/accept {incoming_tid[:8]}")
+                self.assertEqual(len(list(dl_dir.glob("*.part"))), 1)
+
+                # Successful /logout must abort outgoing worker, remove .part file, and clear users
+                cli.execute("/logout")
+                sender_outcome = cli.file_sender.wait(outgoing_manifest.transfer_id, timeout=0.4)
+                self.assertFalse(sender_outcome["ok"])
+                self.assertEqual(sender_outcome["code"], "logged_out")
+                self.assertEqual(list(dl_dir.glob("*.part")), [])
+                self.assertEqual(cli.users, [])
+                self.assertIn("Đã đăng xuất thành công.", out.getvalue())
+
+                # Unauthenticated /logout must surface server error code cleanly
+                conn.responder = lambda kind, fields: {
+                    "v": 1,
+                    "type": "error",
+                    "ok": False,
+                    "code": "unauthorized",
+                }
+                out.truncate(0)
+                out.seek(0)
+                cli.execute("/logout")
+                self.assertIn("Đăng xuất thất bại: unauthorized", out.getvalue())
+            finally:
+                cli.file_sender.abort_all("test_cleanup")
+                cli.file_receiver.abort_all("test_cleanup")
+
     def test_client_udp_discover_and_heartbeat_round_trip(self):
         server = DiscoveryServer(37021, bind_host="127.0.0.1", udp_port=0)
         server.start()
