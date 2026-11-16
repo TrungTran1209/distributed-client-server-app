@@ -1,114 +1,170 @@
-# Sơ đồ tuần tự
+# Sơ đồ tuần tự (Sequence Diagrams)
 
-Các sơ đồ dưới đây phân biệt luồng đang có trong mã với luồng file chưa triển khai. Tên message giữ nguyên theo protocol để có thể tra trong code.
+Tài liệu này mô tả đầy đủ các luồng tương tác tuần tự đã triển khai trong mã nguồn, bao gồm: dò tìm máy chủ qua UDP, thiết lập kênh TCP/TLS, đăng ký/đăng nhập với `scrypt` có phiên bản tham số, nhắn tin broadcast/direct, truyền tệp tin cậy nhiều chunk và cơ chế tự phục hồi khi từ chối, quá hạn hoặc đứt kết nối. Tên bản tin khớp chính xác với `collab.common.protocol.MessageType`.
 
-## Tìm server qua UDP rồi kết nối an toàn
+## 1. Tìm máy chủ qua UDP rồi kết nối TCP/TLS an toàn
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant U as Server discovery UDP
+    participant C as Client CLI
+    participant U as Server Discovery UDP
     participant T as Server TCP/TLS
+
     C->>U: discover(request_id)
-    U-->>C: server_announcement(host, tcp_port)
-    Note over C,T: Discovery chỉ trả địa chỉ gợi ý; client vẫn xác minh chứng chỉ TLS
+    U-->>C: server_announcement(request_id, server_id, server_name, host, tcp_port)
+    Note over C,T: Địa chỉ UDP chỉ là gợi ý; danh tính máy chủ phải được xác minh ở bước TLS
     C->>T: TCP connect
-    C->>T: TLS ClientHello
-    T-->>C: Chứng chỉ server + TLS handshake
-    Note over C: Client xác minh CA và hostname/IP
-    C->>T: hello(request_id)
-    T-->>C: welcome(request_id)
-    loop Theo chu kỳ công bố trong welcome
+    C->>T: TLS Handshake (TLS 1.2+ / TLS 1.3)
+    T-->>C: Chứng chỉ X.509 của Server
+    Note over C: Xác minh chuỗi tin cậy CA và khớp SAN (hostname/IP)
+    C->>T: hello(request_id, client, client_version)
+    T-->>C: welcome(request_id, protocol_version=1, heartbeat_interval_sec=30)
+    Note over C: Bắt tay ứng dụng hoàn tất trước khi mở luồng đọc nền để tránh xung đột TLS 1.3 NewSessionTicket
+
+    loop Định kỳ theo heartbeat_interval_sec
         C->>T: ping(request_id)
         T-->>C: pong(request_id)
         C->>U: client_heartbeat(client_id)
         U-->>C: heartbeat_ack(client_id, server_id)
     end
-    Note over C,U: UDP heartbeat không giữ phiên TCP và không đăng nhập user
 ```
 
-## Đăng ký và đăng nhập
+## 2. Đăng ký, Đăng nhập và Nâng cấp tham số KDF `scrypt`
 
 ```mermaid
 sequenceDiagram
     participant C as Client CLI
-    participant T as Server TCP/TLS
-    participant DB as SQLite tài khoản
+    participant T as Server AuthService
+    participant DB as SQLite UserStore
+
     C->>T: register(request_id, username, password)
-    Note over C,T: Password chỉ được gửi sau TLS
-    T->>DB: Dẫn xuất và lưu salt + scrypt hash
-    DB-->>T: Tạo tài khoản thành công/thất bại
-    T-->>C: register_result(ok, code?)
+    Note over C,T: Mật khẩu chỉ truyền bên trong kết nối TLS đã xác minh
+    T->>DB: Sinh salt ngẫu nhiên 16B + dẫn xuất scrypt + lưu kdf_params
+    DB-->>T: Kết quả INSERT (thành công hoặc trùng username)
+    T-->>C: register_result(request_id, ok, code?)
+
     C->>T: login(request_id, username, password)
-    T->>DB: Đọc salt/hash và kiểm tra password
-    DB-->>T: Kết quả xác thực
-    T-->>C: login_result(ok, session_id hoặc code)
-    T-->>C: user_list(users, IP/cổng TCP peer)
-    T-->>C: presence_online đến client khác (nếu có)
-```
-
-Đề gốc yêu cầu cơ chế đăng nhập; bước đăng ký và cách lưu tài khoản bằng `scrypt` là thiết kế bổ sung của nhóm.
-
-## Gửi tin nhắn riêng hoặc broadcast
-
-```mermaid
-sequenceDiagram
-    participant A as Client người gửi
-    participant S as Server router
-    participant B as Client người nhận
-    A->>S: chat_send(request_id, to, text)
-    alt to là username
-        S->>S: Tìm session đang online của người nhận
-        S-->>B: chat_message(from, to, text, sent_at, message_id)
-    else to là null
-        loop Mỗi client online khác người gửi
-            S-->>B: chat_message(from, null, text, sent_at, message_id)
+    T->>DB: Đọc (salt, password_hash, kdf_params)
+    alt Tài khoản không tồn tại
+        DB-->>T: Dẫn xuất giả với dummy salt để giảm chênh lệch thời gian
+        T-->>C: login_result(request_id, ok=false, code="invalid_credentials")
+    else Tài khoản tồn tại và mật khẩu khớp (hmac.compare_digest)
+        opt Tham số kdf_params cũ hơn cấu hình hiện tại (needs_rehash)
+            T->>DB: Dẫn xuất lại salt mới + hash mới và UPDATE kdf_params
         end
+        T->>T: Đăng ký phiên vào SessionRegistry (gắn IP và cổng TCP nguồn)
+        T-->>C: login_result(request_id, ok=true, username, session_id)
+        T-->>C: user_list(users=[{username, host, port}, ...])
+        T-->>Các client khác: presence_online(username)
     end
-    S-->>A: chat_result(ok, message_id hoặc code)
 ```
 
-`chat_result.ok=true` nghĩa là server đã định tuyến, không chứng minh người nhận đã đọc. Không có lưu lịch sử hoặc hàng đợi offline.
-
-## Thoát hoặc mất kết nối
+## 3. Gửi tin nhắn riêng (Direct) và Broadcast
 
 ```mermaid
 sequenceDiagram
-    participant C as Client
-    participant S as Server
+    participant A as Client Người gửi
+    participant S as Server MessageRouter
+    participant B as Client Người nhận
+
+    A->>S: chat_send(request_id, to, text)
+    alt to là username cụ thể
+        S->>S: Tra cứu phiên đang online của người nhận
+        S-->>B: chat_message(message_id, from, to, text, sent_at)
+        S-->>A: chat_result(request_id, ok=true, message_id)
+    else to là null (broadcast)
+        loop Mỗi phiên online khác người gửi
+            S-->>B: chat_message(message_id, from, to=null, text, sent_at)
+        end
+        S-->>A: chat_result(request_id, ok=true, message_id)
+    end
+```
+
+## 4. Truyền tệp Đáng tin cậy qua TCP/TLS (Luồng Thành công)
+
+Toàn bộ luồng điều khiển và dữ liệu tệp đi qua kết nối TCP/TLS hiện có. Các request có `request_id` được phản hồi tức thì để không chặn luồng đọc nền `_receive_loop` trên client; các bản tin chuyển tiếp dùng server push event bất đồng bộ.
+
+```mermaid
+sequenceDiagram
+    participant A as Client Gửi (FileSender)
+    participant S as Server (TransferCoordinator)
+    participant B as Client Nhận (FileReceiver)
+
+    A->>A: Tính kích thước & SHA-256 streaming, chia total_chunks
+    A->>S: file_offer(request_id, transfer_id, to, filename, size, sha256, chunk_size, total_chunks)
+    S->>S: Kiểm tra tên tệp an toàn, giới hạn dung lượng, trạng thái online của B
+    S-->>B: file_offer_event(transfer_id, from, filename, size, sha256, chunk_size, total_chunks, expires_in_sec=60)
+    S-->>A: file_offer_result(request_id, ok=true, transfer_id)
+
+    Note over B: Mở trước tệp tạm .<filename>.<transfer_id>.part trong download_dir
+    B->>S: file_accept(request_id, transfer_id)
+    S-->>B: file_accept_result(request_id, ok=true, transfer_id)
+    S-->>A: file_decision(transfer_id, accepted=true, by)
+
+    loop index = 0 .. total_chunks - 1
+        A->>S: file_chunk(request_id, transfer_id, index, data_base64)
+        S->>S: Kiểm tra thứ tự index & kích thước chunk (không lưu chunk trong RAM)
+        S-->>B: file_chunk_event(transfer_id, from, index, data_base64)
+        B->>B: Giải mã Base64, ghi trực tiếp vào .part, cập nhật SHA-256 tăng dần
+        S-->>A: file_chunk_result(request_id, ok=true, transfer_id, index)
+    end
+
+    A->>S: file_end(request_id, transfer_id, size, sha256)
+    S->>S: Đối chiếu tổng số chunk và tổng số byte đã chuyển tiếp
+    S-->>B: file_end_event(transfer_id, from, size, sha256, total_chunks)
+    S-->>A: file_result(request_id, ok=true, transfer_id, stage="verifying")
+
+    B->>B: Đóng .part, kiểm tra bytes_received == size và SHA-256 khớp 100%
+    B->>B: Đổi tên nguyên tử os.replace(.part -> tên đích không ghi đè)
+    B->>S: file_ack(request_id, transfer_id, ok=true, sha256)
+    S-->>B: file_ack_result(request_id, ok=true, transfer_id)
+    S-->>A: file_status(transfer_id, ok=true, by, sha256)
+```
+
+## 5. Truyền tệp: Từ chối, Quá hạn (Timeout) và Phục hồi khi Lỗi / Đứt kết nối
+
+```mermaid
+sequenceDiagram
+    participant A as Client Gửi (FileSender)
+    participant S as Server (TransferCoordinator)
+    participant B as Client Nhận (FileReceiver)
+
+    alt Trường hợp 1: Người nhận từ chối (/reject)
+        A->>S: file_offer(...)
+        S-->>B: file_offer_event(...)
+        S-->>A: file_offer_result(ok=true)
+        B->>S: file_reject(request_id, transfer_id, reason)
+        S-->>B: file_reject_result(request_id, ok=true, transfer_id)
+        S-->>A: file_decision(transfer_id, accepted=false, code="rejected")
+    else Trường hợp 2: Quá hạn chờ xác nhận (60s) hoặc treo luồng chunk (30s)
+        S->>S: reap_expired() phát hiện phiên quá hạn
+        S-->>A: file_status(transfer_id, ok=false, code="transfer_timeout")
+        S-->>B: file_status(transfer_id, ok=false, code="transfer_timeout")
+        B->>B: Đóng handle và xóa ngay tệp .part (nếu có)
+    else Trường hợp 3: Sai mã băm SHA-256 khi kết thúc
+        S-->>B: file_end_event(...)
+        B->>B: Phát hiện SHA-256 lệch -> xóa ngay tệp .part
+        B->>S: file_ack(request_id, transfer_id, ok=false, code="checksum_mismatch")
+        S-->>B: file_ack_result(request_id, ok=true)
+        S-->>A: file_status(transfer_id, ok=false, code="checksum_mismatch")
+    else Trường hợp 4: Một bên mất kết nối đột ngột giữa chừng
+        A--xS: EOF / Socket Reset / Timeout
+        S->>S: on_disconnect(alice) thu hồi phiên truyền & phát presence_offline
+        S-->>B: file_status(transfer_id, ok=false, code="peer_disconnected")
+        B->>B: Đóng file descriptor và xóa sạch tệp .part dở dang
+    end
+```
+
+## 6. Đăng xuất chủ động
+
+```mermaid
+sequenceDiagram
+    participant C as Client CLI
+    participant S as Server TCP/TLS
+
     C->>S: logout(request_id)
-    S-->>C: logout_result(ok=true)
-    S->>S: Xóa session khỏi registry
+    S->>S: Hủy các phiên truyền tệp đang mở của user (nếu có)
+    S->>S: Xóa phiên khỏi SessionRegistry
+    S-->>C: logout_result(request_id, ok=true)
     S-->>Các client khác: presence_offline(username)
-    Note over C,S: Nếu EOF, timeout hoặc socket lỗi, server cũng xóa session và phát offline
 ```
-
-## Truyền file
-
-**Chưa triển khai đầu-cuối.** Các module `transfer/` hiện là khung; server trả `error(code=server_busy)` khi nhận `file_offer`, `file_chunk` hoặc `file_end`. Vì chưa có lifecycle đang chạy, tài liệu không mô tả một sequence thành công giả định. Khi tích hợp, cần bổ sung offer/accept/reject, chunk index/offset, checksum, phản hồi tiến độ, hành vi resume/cleanup và cập nhật sơ đồ theo code thực.
-
-Sơ đồ dưới đây là **phác thảo để nhóm hoàn thiện theo yêu cầu đề**, không phải hợp đồng giao thức đã chốt hay tính năng có thể chạy. Tên message/field chỉ minh họa; Member 1–3 phải thống nhất schema trước khi triển khai.
-
-```mermaid
-sequenceDiagram
-    participant A as Client gửi
-    participant S as Server chuyển tiếp
-    participant B as Client nhận
-    A->>S: FILE_OFFER(metadata, transfer_id)
-    S-->>B: FILE_OFFER(metadata, transfer_id)
-    B-->>S: Chấp nhận hoặc từ chối (cần chốt message)
-    S-->>A: Kết quả chấp nhận/từ chối
-    loop Mỗi chunk nếu được chấp nhận
-        A->>S: FILE_CHUNK(transfer_id, index, bytes)
-        S->>B: FILE_CHUNK(transfer_id, index, bytes)
-        B-->>S: ACK/progress (cần chốt)
-        S-->>A: ACK/progress (cần chốt)
-    end
-    A->>S: FILE_END(transfer_id, kích thước, SHA-256)
-    S->>B: FILE_END(transfer_id, kích thước, SHA-256)
-    B->>B: Ghép chunk, kiểm tra kích thước và checksum
-    B-->>S: FILE_RESULT(success/failure)
-    S-->>A: FILE_RESULT(success/failure)
-```
-
-Tất cả message file khi triển khai phải đi trong kết nối TCP/TLS hiện có; không mở kênh UDP hoặc TCP không mã hóa riêng. Tên file phải được xử lý an toàn và nội dung chưa đủ/chưa kiểm checksum không được xem là file hoàn tất.

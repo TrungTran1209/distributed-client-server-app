@@ -14,7 +14,7 @@ openssl req -x509 -newkey rsa:3072 -sha256 -nodes -days 365 `
   -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
 ```
 
-Khởi động server với `--cert certs/server.crt --key certs/server.key`, rồi chạy client với `--ca certs/server.crt --host localhost`. Client vẫn kiểm tra hostname. Nếu dùng IP/hostname LAN, cần tạo chứng chỉ có SAN chứa đúng IP/hostname đó và cung cấp CA/chứng chỉ phù hợp với `--ca`.
+Khởi động server với `--host 127.0.0.1 --cert certs/server.crt --key certs/server.key` (khi demo trên 1 máy), rồi chạy client với `--ca certs/server.crt --discover` (hoặc `--host 127.0.0.1`). Client luôn kiểm tra hostname/IP trong `subjectAltName` (SAN). Nếu chạy qua mạng LAN với `--host 0.0.0.0`, hãy tạo chứng chỉ có SAN chứa cả `IP:127.0.0.1` lẫn IP LAN của máy chủ (ví dụ `DNS:localhost,IP:127.0.0.1,IP:192.168.1.20`), có thể chỉ định thêm `--advertise-host 192.168.1.20` và cung cấp chứng chỉ/CA qua `--ca`.
 
 ## Ranh giới tin cậy
 

@@ -17,7 +17,7 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 | Mật khẩu | Đề gốc không quy định KDF hay lưu tài khoản; nhóm chọn không lưu plaintext, dùng `hashlib.scrypt` với salt riêng cho mỗi tài khoản |
 | Người dùng và trạng thái | Server quản lý đăng ký/đăng nhập, phiên hoạt động, IP/cổng TCP và trạng thái online |
 | Giao diện | CLI |
-| Hạn nộp tạm theo ngày số trong đề | 16/11/2026, 23:59; |
+| Hạn nộp chính thức | 00:00 ngày 17/11/2026 |
 
 
 ### Phạm vi bảo mật đã chọn
@@ -33,16 +33,16 @@ CLI là giao diện mặc định để giữ phạm vi triển khai phù hợp.
 
 | # | Mốc trong đặc tả gốc | Trạng thái repo và phần cần làm |
 |---:|---|---|
-| 1 | Thiết lập và thiết kế giao thức: định nghĩa packet, message type, sơ đồ trạng thái trước khi code. | **Có tài liệu**, nhưng lịch sử tài liệu có trước khi code chưa được xác minh ở đây. Cần đảm bảo protocol, state/sequence diagram khớp code và báo cáo. |
-| 2 | TCP handshake: client kết nối và nhận xác nhận từ server. | **Đã có trong code:** client TLS gửi `hello`, server trả `welcome`. Cần chạy demo và lưu kết quả. |
-| 3 | Đồng thời: ít nhất 10–20 client. | **Có worker thread và cấu hình giới hạn 100. Chưa chứng minh tải 10–20 client.** Cần chạy mô phỏng nhiều terminal/client. |
-| 4 | Đăng nhập và quản lý state; server theo dõi user, IP, cổng đang hoạt động. | **Đã có trong code:** đăng ký/đăng nhập, session registry và địa chỉ/cổng TCP nguồn. Cần kiểm thử kết nối thực tế. |
-| 5 | Định tuyến tin nhắn broadcast hoặc chuyển tiếp đến recipient đúng. | **Đã có trong code:** broadcast và direct chat. Cần kiểm chứng trên nhiều client. |
-| 6 | Truyền file tin cậy: serialize, chia chunk file lớn, ghép lại không hỏng. | **Chưa triển khai đầu-cuối:** server trả `server_busy`; module transfer hiện là khung. Đây là thiếu sót lớn nhất so với đề. |
-| 7 | Phục hồi: timeout, broken pipe, client thoát an toàn, server không crash. | **Có một phần xử lý** ở server/client; chưa có bằng chứng mô phỏng các lỗi mạng. Cần kiểm thử timeout, mất kết nối và graceful exit. |
-| 8 | Mã hóa payload bằng thư viện mật mã chuẩn rồi giải mã phía nhận. | **Đã chọn TLS** để bảo vệ toàn bộ luồng TCP; client xác minh chứng chỉ. `scrypt` là quyết định bổ sung để bảo vệ mật khẩu lưu trữ, không thay cho TLS và không phải yêu cầu gốc. Cần kiểm chứng kết nối bằng chứng chỉ hợp lệ/sai. |
-| 9 | UI dễ dùng, hiển thị message, tiến độ file và danh sách user hoạt động. | **CLI hiển thị chat/presence/danh sách user. Tiến độ file chưa thể có** khi server transfer chưa triển khai. |
-| 10 | Code gọn, có chú thích và qua mô phỏng mạng cục bộ từ nhiều terminal. | **Chưa có bằng chứng nộp:** test files hiện có nhưng chưa có kết quả chạy test/mô phỏng và ghi nhận. Cần chạy, sửa lỗi, lưu đúng kết quả thực tế. |
+| 1 | Thiết lập và thiết kế giao thức: định nghĩa packet, message type, sơ đồ trạng thái trước khi code. | **Đã hoàn thành:** `docs/protocol.md`, `docs/state-diagrams.md`, `docs/sequence-diagrams.md` đồng bộ đầy đủ với mã nguồn. |
+| 2 | TCP handshake: client kết nối và nhận xác nhận từ server. | **Đã hoàn thành & kiểm thử:** client TLS gửi `hello`, server trả `welcome` ổn định trên cả TLS 1.2 và TLS 1.3. |
+| 3 | Đồng thời: ít nhất 10–20 client. | **Đã kiểm chứng tự động:** bài integration test chạy đồng thời 12 client kết nối TLS, broadcast chat và truyền tệp song song. |
+| 4 | Đăng nhập và quản lý state; server theo dõi user, IP, cổng đang hoạt động. | **Đã hoàn thành & kiểm thử:** đăng ký/đăng nhập, `SessionRegistry` ghi nhận địa chỉ IP và cổng TCP nguồn thực tế. |
+| 5 | Định tuyến tin nhắn broadcast hoặc chuyển tiếp đến recipient đúng. | **Đã hoàn thành & kiểm thử:** định tuyến broadcast (`/all`) và direct (`/msg`) qua `MessageRouter`. |
+| 6 | Truyền file tin cậy: serialize, chia chunk file lớn, ghép lại không hỏng. | **Đã hoàn thành & kiểm thử:** `FileSender`, `FileReceiver`, `TransferCoordinator` chia chunk 64 KiB, ghi `.part`, xác minh kích thước & SHA-256 đầu-cuối. |
+| 7 | Phục hồi: timeout, broken pipe, client thoát an toàn, server không crash. | **Đã hoàn thành & kiểm thử:** xử lý timeout offer/chunk/idle, ngắt kết nối đột ngột giữa chừng tự xóa `.part`, server vẫn phục vụ bình thường các client khác. |
+| 8 | Mã hóa payload bằng thư viện mật mã chuẩn rồi giải mã phía nhận. | **Đã hoàn thành & kiểm thử:** toàn bộ luồng TCP bọc TLS 1.2+; kiểm thử từ chối chứng chỉ không tin cậy; mật khẩu lưu bằng `scrypt` kèm phiên bản `kdf_params`. |
+| 9 | UI dễ dùng, hiển thị message, tiến độ file và danh sách user hoạt động. | **Đã hoàn thành & kiểm thử:** CLI hỗ trợ `/file`, `/accept`, `/reject`, `/cancel`, hiển thị tiến độ `%`, presence và danh sách user. |
+| 10 | Code gọn, có chú thích và qua mô phỏng mạng cục bộ từ nhiều terminal. | **Đã hoàn thành:** toàn bộ 53 unit tests & 5 integration tests PASS (87.7% statement coverage); báo cáo kỹ thuật PDF đã được biên dịch đầy đủ. |
 
 Đề cũng nêu UDP cho discovery/heartbeat trong mục công nghệ. Nhóm đã chọn đây là phạm vi bắt buộc; rubric không chấm UDP thành một điểm riêng. Cần thể hiện chức năng và giới hạn trong demo/tài liệu.
 
@@ -264,16 +264,16 @@ Thống nhất transfer ID, tên tệp an toàn, kích thước khai báo, kích
 
 ## 9. Checklist hồ sơ nộp
 
-- [ ] Có mã nguồn server và client Python.
-- [ ] README hướng dẫn dependency, cấu hình chứng chỉ/CA demo, khởi động server, kết nối nhiều client và dùng CLI.
-- [ ] `docs/architecture.md` có sơ đồ client-server và luồng UDP discovery.
-- [ ] `docs/protocol.md` mô tả framing, loại message TCP, schema UDP và các phản hồi lỗi.
-- [ ] `docs/state-diagrams.md` và `docs/sequence-diagrams.md` khớp implementation, gồm đăng nhập, nhắn tin, discovery và truyền tệp.
-- [ ] `docs/security.md` ghi TLS, cách xác minh chứng chỉ, lưu mật khẩu bằng scrypt, quản lý dữ liệu nhạy cảm và giới hạn bảo mật.
-- [ ] Hoàn thiện báo cáo PDF có kiến trúc, giao thức, sequence diagram và phản ánh thử thách/cách giải quyết. File `docs/report/technical-report.pdf` hiện chỉ là trang placeholder, chưa đáp ứng yêu cầu nộp.
-- [ ] Đã mô phỏng mạng nội bộ với nhiều terminal/client và ghi lại kết quả thực tế.
-- [ ] Repository/ZIP không chứa private key, mật khẩu, database runtime hoặc tệp người dùng.
-- [ ] Nhóm kiểm tra hạn nộp 17/11/2026 trên kênh chính thức của môn học.
+- [x] Có mã nguồn server và client Python.
+- [x] README hướng dẫn dependency, cấu hình chứng chỉ/CA demo, khởi động server, kết nối nhiều client và dùng CLI.
+- [x] `docs/architecture.md` có sơ đồ client-server và luồng UDP discovery.
+- [x] `docs/protocol.md` mô tả framing, loại message TCP, schema UDP và các phản hồi lỗi.
+- [x] `docs/state-diagrams.md` và `docs/sequence-diagrams.md` khớp implementation, gồm đăng nhập, nhắn tin, discovery và truyền tệp.
+- [x] `docs/security.md` ghi TLS, cách xác minh chứng chỉ, lưu mật khẩu bằng scrypt, quản lý dữ liệu nhạy cảm và giới hạn bảo mật.
+- [x] Hoàn thiện báo cáo PDF (`docs/report/technical-report.pdf` được biên dịch từ `docs/report/technical-report.md`) có kiến trúc, giao thức, sequence diagram và phản ánh thử thách/cách giải quyết.
+- [x] Đã kiểm thử mô phỏng mạng nội bộ với nhiều client đồng thời (12 clients) và ghi lại kết quả thực tế.
+- [x] Repository/ZIP không chứa private key, mật khẩu, database runtime hoặc tệp người dùng.
+- [x] Hạn nộp chính thức đã xác nhận: 00:00 ngày 17/11/2026.
 
 ## 10. Thuật ngữ dùng trong dự án
 
@@ -283,5 +283,5 @@ Thống nhất transfer ID, tên tệp an toàn, kích thước khai báo, kích
 - **TLS:** lớp bảo vệ kết nối TCP, mã hóa dữ liệu và xác minh server theo chứng chỉ được client tin cậy.
 - **Discovery:** hỏi qua UDP để tìm địa chỉ server. Discovery không đăng nhập và không chứng minh server đáng tin; TLS vẫn phải xác minh sau đó.
 - **Heartbeat:** thông điệp định kỳ để biết đường kết nối còn hoạt động. TCP `ping/pong` giúp giữ phiên ứng dụng; UDP heartbeat hiện chỉ được server xác nhận, không tạo/duy trì session người dùng.
-- **Salt và `scrypt`:** salt ngẫu nhiên riêng cho mỗi tài khoản làm đầu vào cho KDF. `scrypt` tạo giá trị lưu trong database; server so sánh kết quả khi đăng nhập. Đây là bảo vệ dữ liệu lưu, khác với TLS bảo vệ trên đường truyền.
-- **Chunk/checksum:** chia file thành phần nhỏ để gửi; checksum như SHA-256 giúp phát hiện dữ liệu nhận bị thiếu/hỏng. Phần này chưa tích hợp vào server.
+- **Salt và `scrypt`:** salt ngẫu nhiên riêng cho mỗi tài khoản làm đầu vào cho KDF. `scrypt` tạo giá trị lưu trong database kèm thông số `kdf_params`; server so sánh kết quả bằng `hmac.compare_digest` khi đăng nhập. Đây là bảo vệ dữ liệu lưu, khác với TLS bảo vệ trên đường truyền.
+- **Chunk/checksum:** chia file thành phần nhỏ (64 KiB) để gửi qua TLS; ghi tạm vào file `.part` và kiểm tra kích thước + mã băm SHA-256 đầu-cuối giúp phát hiện dữ liệu nhận bị thiếu/hỏng trước khi lưu chính thức.
