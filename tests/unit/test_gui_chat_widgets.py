@@ -336,7 +336,7 @@ class TestMainWindowWiring:
         c.auth_succeeded.emit("alice")
         assert w.current_page() == "chat"
         c.users_updated.emit(USERS)
-        assert w.chat_view._users.count() == 4
+        assert w.chat_view._users.count() == 3  # own user excluded
         c.message_received.emit({"type": "chat_message", "from": "bob", "to": None, "text": "yo"})
         assert w.chat_view.message_count() == 1
         c.connection_lost.emit("boom")
@@ -364,3 +364,4 @@ class TestMainWindowWiring:
         w.client_ctrl.transfer_offer.emit({"transfer_id": "t", "from": "bob", "filename": "f",
                                            "size": 1, "total_chunks": 1, "expires_in_sec": 60})
         assert w.pending_offer_count() == 1
+

@@ -1,20 +1,21 @@
-"""Application entry point — launches the main window."""
+"""Desktop application bootstrap."""
 from __future__ import annotations
 
 import sys
 
 
-def main() -> None:  # pragma: no cover
-    """Start the PySide6 application."""
-    import os
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-
+def main() -> None:  # pragma: no cover - requires a display
     from PySide6.QtWidgets import QApplication
+
+    from .controllers.client_controller import ClientController
+    from .controllers.server_controller import ServerController
+    from .main_window import MainWindow
+    from .styles.theme import apply_theme
+
     app = QApplication(sys.argv)
     app.setApplicationName("Collab")
     app.setOrganizationName("CollabProject")
-    # Main window import deferred so that this module is importable without a display
-    # from collab.gui.windows.main_window import MainWindow
-    # win = MainWindow()
-    # win.show()
+    apply_theme(app)
+    window = MainWindow(ServerController(), ClientController())
+    window.show()
     sys.exit(app.exec())

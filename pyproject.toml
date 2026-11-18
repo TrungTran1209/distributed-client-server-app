@@ -10,3 +10,11 @@ requires-python = ">=3.11"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[project.optional-dependencies]
+desktop = ["PySide6>=6.5", "cryptography>=41"]
+test = ["pytest>=7", "pytest-cov>=4"]
+
+[project.gui-scripts]
+collab-gui = "collab.gui.__main__:main"
+

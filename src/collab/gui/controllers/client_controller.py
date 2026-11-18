@@ -1,4 +1,4 @@
-﻿"""ClientController — one stable ClientConnection shared by chat and file transfer.
+"""ClientController — one stable ClientConnection shared by chat and file transfer.
 
 The connection's reader thread invokes :meth:`_on_server_event`; it fans events
 out to FileSender / FileReceiver and re-emits everything else as Qt signals.
@@ -37,6 +37,7 @@ class ClientController(QObject):
     auth_failed = Signal(str)
     register_finished = Signal(bool, str)
     chat_failed = Signal(str)
+    chat_sent = Signal(object, str)
     transfer_offer = Signal(dict)
     transfer_started = Signal(dict)
     transfer_progress = Signal(object)
@@ -210,7 +211,7 @@ class ClientController(QObject):
             return
         worker = ChatWorker(self._conn, to, text)
         worker.signals.result.connect(
-            lambda r: None if r.get("ok") else self.chat_failed.emit(describe_error(r))
+            lambda r: self.chat_sent.emit(to, text) if r.get("ok") else self.chat_failed.emit(describe_error(r))
         )
         worker.signals.error.connect(self.chat_failed.emit)
         self._start(worker)
@@ -291,4 +292,5 @@ _ERROR_TEXT = {
 def describe_error(resp: dict) -> str:
     code = str(resp.get("code", ""))
     return _ERROR_TEXT.get(code) or str(resp.get("message") or code or "Yêu cầu bị từ chối.")
+
 

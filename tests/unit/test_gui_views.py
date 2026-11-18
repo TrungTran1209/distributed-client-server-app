@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unit tests for GUI views (Phase 2).
 Run with QT_QPA_PLATFORM=offscreen.
 """

@@ -137,6 +137,30 @@ Tại dấu nhắc `collab>`:
 4. Terminal 3: nhận thông báo `[file] alice muốn gửi 'technical-report.pdf'...` → gõ `/accept`.
 5. Cả hai terminal hiển thị tiến độ `%` theo thời gian thực và xác nhận **SHA-256 khớp** khi hoàn tất lưu tệp tại `downloads/bob/technical-report.pdf`.
 
+## Ứng dụng Desktop (GUI)
+
+Giao diện đồ họa (PySide6) dùng lại nguyên backend TCP/TLS + UDP hiện có; CLI không bị thay đổi.
+
+```powershell
+python -m pip install -e ".[desktop]"
+$env:PYTHONPATH = "src"      # bỏ qua nếu đã cài editable
+python -m collab.gui         # hoặc: collab-gui
+```
+
+**Host một server (máy chủ):** Home → *Tạo máy chủ* → chọn chứng chỉ/khóa (hoặc bấm *Tạo chứng chỉ demo…*,
+nhập đúng IP LAN vào SAN) → *Khởi chạy Server*. Giao diện chỉ báo "đang chạy" sau khi cổng TCP đã bind thật.
+Bấm *Kết nối vào server này* để dùng chính máy host như một client.
+
+**Tham gia server:** Home → *Tham gia máy chủ* → nhập host/cổng + file `server.crt` làm CA, hoặc tab
+*Dò tìm mạng LAN* (UDP chỉ tìm địa chỉ; TLS vẫn xác minh chứng chỉ). Sau đó đăng ký/đăng nhập.
+
+**Chat & tệp:** chọn "Tất cả mọi người" để broadcast hoặc một người dùng để chat riêng. *Gửi tệp* cần chọn một
+người nhận cụ thể; người nhận thấy hộp thoại Chấp nhận/Từ chối; tiến độ hiển thị trong *Truyền tệp* theo
+chunk/byte thực và chỉ báo hoàn tất sau khi người nhận xác minh SHA-256.
+
+Giới hạn hiện tại (giống backend): lịch sử chat chỉ trong phiên (không lưu), không có hàng đợi tin nhắn offline,
+không tự động kết nối lại (có nút *Kết nối lại* thủ công, phải đăng nhập lại), không resume truyền tệp, không E2EE.
+
 ## Chạy bộ kiểm thử tự động & Xuất báo cáo PDF
 
 ```powershell
