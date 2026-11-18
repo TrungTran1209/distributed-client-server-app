@@ -185,12 +185,13 @@ class TestClientController(unittest.TestCase):
         ctrl.users_updated.connect(updated.append)
 
         # Simulate the on_event callback being called (as if the reader thread fired it)
-        event = {"type": "user_list", "users": ["alice", "bob"]}
+        users = [{"username": "alice", "host": "h", "port": 1}, {"username": "bob", "host": "h", "port": 2}]
+        event = {"type": "user_list", "users": users}
         ctrl._on_server_event(event)
         _pump(200)
 
         self.assertTrue(updated, "users_updated not emitted")
-        self.assertEqual(updated[0], ["alice", "bob"])
+        self.assertEqual(updated[0], users)
 
     # ------------------------------------------------------------------
     def test_client_controller_dispatches_chat_signal(self):
@@ -224,14 +225,15 @@ class TestClientController(unittest.TestCase):
         offers: list = []
         ctrl.transfer_offer.connect(offers.append)
 
+        tid = "3f2b8c1e-9a4d-4c55-8f0e-1b2c3d4e5f60"
         event = {
             "type": "file_offer_event",
-            "transfer_id": "tid-001",
+            "transfer_id": tid,
             "from": "bob",
             "filename": "data.txt",
             "size": 1024,
             "total_chunks": 1,
-            "sha256": "abc",
+            "sha256": "a" * 64,
             "chunk_size": 1024,
             "expires_in_sec": 60,
         }
@@ -239,7 +241,7 @@ class TestClientController(unittest.TestCase):
         _pump(200)
 
         self.assertTrue(offers, "transfer_offer not emitted")
-        self.assertEqual(offers[0]["transfer_id"], "tid-001")
+        self.assertEqual(offers[0]["transfer_id"], tid)
         self.assertEqual(offers[0]["from"], "bob")
 
 

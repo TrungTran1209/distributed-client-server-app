@@ -63,17 +63,30 @@ class CollaborationServer:
         self.transfers = TransferCoordinator(self.sessions, self._send)
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
+        # Readiness signalling for embedders (e.g. the desktop GUI): `ready` is
+        # set once the listener is bound or startup failed (`startup_error`).
+        self.ready = threading.Event()
+        self.startup_error: OSError | None = None
+        self.bound_port: int | None = None
         self._workers: set[threading.Thread] = set()
         self._workers_lock = threading.Lock()
 
     def serve_forever(self) -> None:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if os.name != "nt":
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        listener.bind((self.host, self.port))
-        listener.listen(64)
+        try:
+            if os.name != "nt":
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind((self.host, self.port))
+            listener.listen(64)
+        except OSError as exc:
+            listener.close()
+            self.startup_error = exc
+            self.ready.set()
+            raise
         listener.settimeout(1.0)
         self._listener = listener
+        self.bound_port = listener.getsockname()[1]
+        self.ready.set()
         next_reap = time.monotonic() + 1.0
         log.info("TLS server listening on %s:%d", *listener.getsockname()[:2])
         try:
