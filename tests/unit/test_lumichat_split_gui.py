@@ -120,6 +120,58 @@ class TestSeparateServerAndClientWindows:
         assert win.current_page() == "connect"
         assert ctrl.file_receiver.auto_accept is True
 
+        # Exercise ClientMainWindow signal flows (connect, auth, directory, history, offline notice, transfers, disconnect)
+        win._begin_connect("127.0.0.1", 37021, "/no/such/ca.crt", "downloads")
+        assert not win.connect_view._error_label.isHidden()
+
+        ctrl.discovery_finished.emit(None)
+        assert not win.connect_view._error_label.isHidden()
+        ctrl.discovery_finished.emit({"server_name": "LumiChat", "host": "127.0.0.1", "tcp_port": 37021})
+        assert win.connect_view._discovery_list.count() == 1
+
+        ctrl.connected.emit({"server_name": "LumiChat"})
+        assert win.current_page() == "auth"
+
+        win._register_user = "alice"
+        ctrl.register_finished.emit(True, "")
+        assert win.auth_view._login_user_edit.text() == "alice"
+        ctrl.auth_failed.emit("Sai mật khẩu")
+        assert not win.auth_view._error_label.isHidden()
+
+        ctrl.username = "alice"
+        ctrl.auth_succeeded.emit("alice")
+        assert win.current_page() == "chat"
+
+        ctrl.directory_updated.emit(
+            [
+                {"username": "alice", "online": True, "host": "127.0.0.1", "port": 1},
+                {"username": "bob", "online": False, "host": None, "port": None},
+            ]
+        )
+        ctrl.history_loaded.emit(
+            [{"message_id": "m1", "from": "bob", "to": "alice", "text": "Chào Alice", "sent_at": "09:15"}]
+        )
+        ctrl.chat_sent.emit("bob", "Chào lại Bob")
+        ctrl.chat_queued_offline.emit("bob")
+        assert not win.chat_view._info_banner.isHidden()
+
+        ctrl.transfer_started.emit(
+            {
+                "direction": "receive",
+                "transfer_id": "t-auto",
+                "filename": "report.pdf",
+                "size": 1024,
+                "total_chunks": 1,
+                "peer": "bob",
+            }
+        )
+        assert win.transfer_manager.active_count() == 1
+        ctrl.transfer_done.emit("t-auto", True, {"ok": True, "filename": "report.pdf", "path": "/tmp/report.pdf"})
+        assert win.transfer_manager.active_count() == 0
+
+        ctrl.connection_lost.emit("Mất mạng")
+        assert not win.chat_view._banner.isHidden()
+
 
 class TestOnlineOfflineTablesAndConversationHistory:
     def test_user_list_separates_online_and_offline_tables_and_allows_selecting_offline(self, qapp):

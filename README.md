@@ -137,29 +137,27 @@ Tại dấu nhắc `collab>`:
 4. Terminal 3: nhận thông báo `[file] alice muốn gửi 'technical-report.pdf'...` → gõ `/accept`.
 5. Cả hai terminal hiển thị tiến độ `%` theo thời gian thực và xác nhận **SHA-256 khớp** khi hoàn tất lưu tệp tại `downloads/bob/technical-report.pdf`.
 
-## Ứng dụng Desktop (GUI)
+## Ứng dụng Desktop LumiChat (Tách biệt Server Console & Client App)
 
-Giao diện đồ họa (PySide6) dùng lại nguyên backend TCP/TLS + UDP hiện có; CLI không bị thay đổi.
+Giao diện đồ họa **LumiChat** (PySide6, tông nền trắng tươi sáng) được tách thành **2 ứng dụng độc lập**: **Server Console** và **Client App**, dùng chung nền tảng mạng TCP/TLS + UDP hiện có.
 
 ```powershell
 python -m pip install -e ".[desktop]"
-$env:PYTHONPATH = "src"      # bỏ qua nếu đã cài editable
-python -m collab.gui         # hoặc: collab-gui
+$env:PYTHONPATH = "src"          # bỏ qua nếu đã cài editable
+
+# 1. Mở giao diện Máy chủ (LumiChat Server Console)
+python -m lumichat.server        # hoặc: lumichat-server
+
+# 2. Mở giao diện Người dùng (LumiChat Client — mở nhiều cửa sổ cho nhiều user)
+python -m lumichat.client        # hoặc: lumichat-client / python -m lumichat
 ```
 
-**Host một server (máy chủ):** Home → *Tạo máy chủ* → chọn chứng chỉ/khóa (hoặc bấm *Tạo chứng chỉ demo…*,
-nhập đúng IP LAN vào SAN) → *Khởi chạy Server*. Giao diện chỉ báo "đang chạy" sau khi cổng TCP đã bind thật.
-Bấm *Kết nối vào server này* để dùng chính máy host như một client.
-
-**Tham gia server:** Home → *Tham gia máy chủ* → nhập host/cổng + file `server.crt` làm CA, hoặc tab
-*Dò tìm mạng LAN* (UDP chỉ tìm địa chỉ; TLS vẫn xác minh chứng chỉ). Sau đó đăng ký/đăng nhập.
-
-**Chat & tệp:** chọn "Tất cả mọi người" để broadcast hoặc một người dùng để chat riêng. *Gửi tệp* cần chọn một
-người nhận cụ thể; người nhận thấy hộp thoại Chấp nhận/Từ chối; tiến độ hiển thị trong *Truyền tệp* theo
-chunk/byte thực và chỉ báo hoàn tất sau khi người nhận xác minh SHA-256.
-
-Giới hạn hiện tại (giống backend): lịch sử chat chỉ trong phiên (không lưu), không có hàng đợi tin nhắn offline,
-không tự động kết nối lại (có nút *Kết nối lại* thủ công, phải đăng nhập lại), không resume truyền tệp, không E2EE.
+- **LumiChat Server Console (`lumichat.server`):** Khởi tạo/dừng máy chủ TLS, tạo chứng chỉ SAN demo, xem bảng tài khoản **Trực tuyến / Ngoại tuyến**, và theo dõi trực tiếp **Lịch sử Trace Gói Chunk & Thao tác** (`CHUNK`, `FILE`, `CHAT`, `AUTH`, `SESSION`, lọc và xuất CSV).
+- **LumiChat Client (`lumichat.client`):**
+  - Kết nối máy chủ trực tiếp (kèm CA `certs/server.crt`) hoặc dò tìm qua UDP LAN.
+  - Hiển thị **2 bảng riêng biệt: Trực tuyến và Ngoại tuyến** bên cạnh Kênh chung.
+  - **Chat mọi lúc & Lưu giữ lịch sử:** Nhắn tin cho cả người đang trực tuyến lẫn người đang ngoại tuyến; toàn bộ lịch sử Broadcast và 1–1 được lưu trên SQLite và tự động đồng bộ lại khi người dùng trực tuyến trở lại.
+  - **Truyền tệp tự động không cần bấm Accept:** Chọn người nhận trực tuyến và bấm *Gửi tệp nhanh* — máy nhận tự động ghi tệp tạm `.part`, theo dõi tiến độ từng chunk, xác minh SHA-256 đầu-cuối rồi lưu vào thư mục tải về.
 
 ## Chạy bộ kiểm thử tự động & Xuất báo cáo PDF
 

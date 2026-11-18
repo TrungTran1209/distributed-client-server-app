@@ -51,8 +51,8 @@ class GuiEndToEndTests(unittest.TestCase):
         self.server.stop_server()
         self.tmp.cleanup()
 
-    def _client(self, name):
-        client = ClientController()
+    def _client(self, name, *, auto_accept=True):
+        client = ClientController(auto_accept=auto_accept)
         client.inbox, client.files, client.done, client.offers, client.errors = [], [], [], [], []
         client.message_received.connect(client.inbox.append)
         client.transfer_done.connect(lambda tid, ok, d, c=client: c.done.append((tid, ok, d)))
@@ -121,7 +121,7 @@ class GuiEndToEndTests(unittest.TestCase):
         self.assertEqual(list(bob.dl.glob("*.part")), [])
 
     def test_reject_reports_to_sender_and_leaves_no_files(self):
-        alice, bob = self._client("alice"), self._client("bob")
+        alice, bob = self._client("alice"), self._client("bob", auto_accept=False)
         self.assertTrue(wait_for(lambda: {u["username"] for u in alice.get_users()} >= {"alice", "bob"}))
         src = Path(self.tmp.name) / "r.bin"
         src.write_bytes(b"x" * 1000)

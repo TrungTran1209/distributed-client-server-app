@@ -173,6 +173,11 @@ class CollaborationServer:
                 session.sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+        with self._workers_lock:
+            workers = list(self._workers)
+        for worker in workers:
+            if worker is not threading.current_thread():
+                worker.join(timeout=1.5)
 
     def _handle_connection(self, raw: socket.socket, address: tuple[Any, ...]) -> None:
         tls_sock: ssl.SSLSocket | None = None

@@ -75,7 +75,10 @@ class AuthView(QWidget):
         self._error_label.setWordWrap(True)
         self._error_label.hide()
         self._info_label = QLabel("")
-        self._info_label.setStyleSheet("color: #a6e3a1;")
+        self._info_label.setStyleSheet(
+            "color: #047857; background: #DCFCE7; border: 1px solid #A7F3D0; "
+            "border-radius: 8px; padding: 6px 10px; font-weight: 700;"
+        )
         self._info_label.hide()
         self._btn_back = QPushButton("Ngắt kết nối")
         self._btn_back.clicked.connect(self.back_requested)

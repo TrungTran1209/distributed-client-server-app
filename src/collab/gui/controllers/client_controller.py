@@ -1,18 +1,17 @@
-"""ClientController — one stable ClientConnection shared by chat and file transfer.
-
-The connection's reader thread invokes :meth:`_on_server_event`; it fans events
-out to FileSender / FileReceiver and re-emits everything else as Qt signals.
-Qt queues cross-thread signal deliveries, so widgets are only touched on the UI thread.
+"""ClientController — manages a persistent TLS connection, online/offline directory,
+SQLite chat history sync, and automatic (zero-prompt) SHA-256 chunked file reception.
 """
+
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QObject, QThreadPool, Signal
+from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 
 from collab.client.connection import ClientConnectionError
+from collab.common.errors import TransferError
 from collab.transfer import FileReceiver, FileSender
 
 from ..workers.async_workers import (
@@ -31,6 +30,8 @@ class ClientController(QObject):
     connected = Signal(dict)
     connection_lost = Signal(str)
     users_updated = Signal(list)
+    directory_updated = Signal(list)
+    history_loaded = Signal(list)
     message_received = Signal(dict)
     presence_changed = Signal(str, bool)
     auth_succeeded = Signal(str)
@@ -38,6 +39,7 @@ class ClientController(QObject):
     register_finished = Signal(bool, str)
     chat_failed = Signal(str)
     chat_sent = Signal(object, str)
+    chat_queued_offline = Signal(str)
     transfer_offer = Signal(dict)
     transfer_started = Signal(dict)
     transfer_progress = Signal(object)
@@ -46,12 +48,14 @@ class ClientController(QObject):
     discovery_finished = Signal(object)
     discovery_failed = Signal(str)
 
-    def __init__(self, parent: QObject | None = None) -> None:
+    def __init__(self, parent: QObject | None = None, *, auto_accept: bool = True) -> None:
         super().__init__(parent)
         self._conn: Any = None
         self._heartbeat: Any = None
         self._users: list[dict] = []
+        self._directory: list[dict] = []
         self.username: str | None = None
+        self.auto_accept = auto_accept
         self._pool = QThreadPool.globalInstance()
         self._workers: set = set()
         self.file_sender = FileSender(
@@ -61,14 +65,16 @@ class ClientController(QObject):
         )
         self.file_receiver = FileReceiver(
             self._request,
+            auto_accept=auto_accept,
             on_offer=self._on_offer,
             on_progress=lambda p: self.transfer_progress.emit(p),
             on_complete=lambda tid, ok, d: self.transfer_done.emit(tid, ok, dict(d)),
         )
+        self._dir_timer = QTimer(self)
+        self._dir_timer.setInterval(4000)
+        self._dir_timer.timeout.connect(self.refresh_directory)
 
     def _start(self, worker) -> None:
-        # Keep the worker (and its WorkerSignals) alive until inished is delivered:
-        # an auto-deleted QRunnable would destroy queued signals before delivery.
         worker.setAutoDelete(False)
         self._workers.add(worker)
         worker.signals.finished.connect(lambda w=worker: self._workers.discard(w))
@@ -80,6 +86,9 @@ class ClientController(QObject):
 
     def get_users(self) -> list[dict]:
         return list(self._users)
+
+    def get_directory(self) -> list[dict]:
+        return list(self._directory)
 
     # --------------------------------------------------------- connection
     def _request(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -96,7 +105,6 @@ class ClientController(QObject):
         download_dir: str,
         udp_port: int | None = 37020,
     ) -> None:
-        """Connect on a worker thread; emits ``connected`` or ``connection_lost``."""
         self.file_receiver.download_dir = Path(download_dir)
         worker = ConnectWorker(host, port, tls_context, download_dir, self._on_server_event)
         worker.signals.result.connect(lambda r: self._on_connected(r, host, udp_port))
@@ -114,7 +122,7 @@ class ClientController(QObject):
         self.connected.emit(dict(welcome))
 
     def disconnect(self) -> None:
-        """Close the connection (best-effort logout) and abort local transfers."""
+        self._dir_timer.stop()
         conn, self._conn = self._conn, None
         if self._heartbeat is not None:
             self._heartbeat.stop()
@@ -122,12 +130,13 @@ class ClientController(QObject):
         self.file_sender.abort_all("disconnected")
         self.file_receiver.abort_all("disconnected")
         self._users = []
+        self._directory = []
         self.username = None
         if conn is not None:
             self._start(CallWorker(conn.close))
 
     def shutdown_blocking(self) -> None:
-        """Synchronous close used from ``closeEvent`` so threads end before exit."""
+        self._dir_timer.stop()
         conn, self._conn = self._conn, None
         if self._heartbeat is not None:
             self._heartbeat.stop()
@@ -139,7 +148,6 @@ class ClientController(QObject):
 
     # ------------------------------------------------------------- events
     def _on_server_event(self, event: dict) -> None:
-        """Called from the connection reader thread."""
         if self.file_sender.handle_event(event) or self.file_receiver.handle_event(event):
             return
         kind = event.get("type")
@@ -152,31 +160,91 @@ class ClientController(QObject):
         elif kind == "user_list":
             raw = event.get("users")
             self._users = [u for u in raw if isinstance(u, dict)] if isinstance(raw, list) else []
+            raw_dir = event.get("directory")
+            if isinstance(raw_dir, list):
+                self._directory = [dict(d) for d in raw_dir if isinstance(d, dict)]
+            else:
+                self._merge_online_into_directory(self._users)
             self.users_updated.emit(list(self._users))
+            self.directory_updated.emit(list(self._directory))
         elif kind in {"presence_online", "presence_offline"}:
             name = str(event.get("username", ""))
             online = kind == "presence_online"
             if online and not any(u.get("username") == name for u in self._users):
-                # presence events carry no address — do not invent one
                 self._users = [*self._users, {"username": name, "host": None, "port": None}]
             elif not online:
                 self._users = [u for u in self._users if u.get("username") != name]
+            self._update_directory_presence(name, online)
             self.presence_changed.emit(name, online)
+            self.directory_updated.emit(list(self._directory))
         elif kind == "chat_message":
             self.message_received.emit(dict(event))
 
+    def _merge_online_into_directory(self, online_users: list[dict]) -> None:
+        online_map = {str(u.get("username")): u for u in online_users if u.get("username")}
+        by_name = {str(d.get("username")): dict(d) for d in self._directory if d.get("username")}
+        for uname in list(by_name.keys()):
+            if uname in online_map:
+                by_name[uname]["online"] = True
+                by_name[uname]["host"] = online_map[uname].get("host")
+                by_name[uname]["port"] = online_map[uname].get("port")
+            else:
+                by_name[uname]["online"] = False
+                by_name[uname]["host"] = None
+                by_name[uname]["port"] = None
+        for uname, u in online_map.items():
+            if uname not in by_name:
+                by_name[uname] = {
+                    "username": uname,
+                    "online": True,
+                    "host": u.get("host"),
+                    "port": u.get("port"),
+                }
+        self._directory = sorted(by_name.values(), key=lambda item: str(item["username"]))
+
+    def _update_directory_presence(self, username: str, online: bool) -> None:
+        if not username:
+            return
+        updated = False
+        next_dir: list[dict] = []
+        for entry in self._directory:
+            if entry.get("username") == username:
+                item = dict(entry)
+                item["online"] = online
+                if not online:
+                    item["host"] = None
+                    item["port"] = None
+                next_dir.append(item)
+                updated = True
+            else:
+                next_dir.append(dict(entry))
+        if not updated:
+            next_dir.append({"username": username, "online": online, "host": None, "port": None})
+            next_dir.sort(key=lambda item: str(item["username"]))
+        self._directory = next_dir
+
     def _on_offer(self, manifest, sender: str) -> None:
-        self.transfer_offer.emit(
-            {
-                "transfer_id": manifest.transfer_id,
-                "from": sender,
-                "filename": manifest.filename,
-                "size": manifest.size,
-                "sha256": manifest.sha256,
-                "chunk_size": manifest.chunk_size,
-                "total_chunks": manifest.total_chunks,
-            }
-        )
+        offer_dict = {
+            "transfer_id": manifest.transfer_id,
+            "from": sender,
+            "filename": manifest.filename,
+            "size": manifest.size,
+            "sha256": manifest.sha256,
+            "chunk_size": manifest.chunk_size,
+            "total_chunks": manifest.total_chunks,
+        }
+        self.transfer_offer.emit(offer_dict)
+        if self.file_receiver.auto_accept:
+            self.transfer_started.emit(
+                {
+                    "direction": "receive",
+                    "transfer_id": manifest.transfer_id,
+                    "filename": manifest.filename,
+                    "size": manifest.size,
+                    "total_chunks": manifest.total_chunks,
+                    "peer": sender,
+                }
+            )
 
     # --------------------------------------------------------------- auth
     def login(self, username: str, password: str) -> None:
@@ -201,8 +269,38 @@ class ClientController(QObject):
         elif ok:
             self.username = str(resp.get("username", username))
             self.auth_succeeded.emit(self.username)
+            self.fetch_history()
+            self.refresh_directory()
+            self._dir_timer.start()
         else:
             self.auth_failed.emit(describe_error(resp))
+
+    def fetch_history(self, limit: int = 300) -> None:
+        if not self.is_connected():
+            return
+        worker = CallWorker(lambda: self._request("chat_history", limit=limit))
+        worker.signals.result.connect(self._on_history_result)
+        self._start(worker)
+
+    def _on_history_result(self, resp: dict) -> None:
+        if isinstance(resp, dict) and resp.get("ok"):
+            msgs = resp.get("messages")
+            if isinstance(msgs, list):
+                self.history_loaded.emit([dict(m) for m in msgs if isinstance(m, dict)])
+
+    def refresh_directory(self) -> None:
+        if not self.is_connected() or not self.username:
+            return
+        worker = CallWorker(lambda: self._request("user_directory"))
+        worker.signals.result.connect(self._on_directory_result)
+        self._start(worker)
+
+    def _on_directory_result(self, resp: dict) -> None:
+        if isinstance(resp, dict) and resp.get("ok"):
+            raw_dir = resp.get("directory")
+            if isinstance(raw_dir, list):
+                self._directory = [dict(d) for d in raw_dir if isinstance(d, dict)]
+                self.directory_updated.emit(list(self._directory))
 
     # ------------------------------------------------------- chat / files
     def send_chat(self, to: str | None, text: str) -> None:
@@ -210,11 +308,17 @@ class ClientController(QObject):
             self.chat_failed.emit("Mất kết nối — không thể gửi tin nhắn.")
             return
         worker = ChatWorker(self._conn, to, text)
-        worker.signals.result.connect(
-            lambda r: self.chat_sent.emit(to, text) if r.get("ok") else self.chat_failed.emit(describe_error(r))
-        )
+        worker.signals.result.connect(lambda r: self._on_chat_result(to, text, r))
         worker.signals.error.connect(self.chat_failed.emit)
         self._start(worker)
+
+    def _on_chat_result(self, to: str | None, text: str, resp: dict) -> None:
+        if resp.get("ok"):
+            self.chat_sent.emit(to, text)
+            if resp.get("queued_offline") and to:
+                self.chat_queued_offline.emit(to)
+        else:
+            self.chat_failed.emit(describe_error(resp))
 
     def send_file(self, path: str, recipient: str) -> None:
         worker = FileSendWorker(self.file_sender, path, recipient)
@@ -234,9 +338,19 @@ class ClientController(QObject):
         self._start(worker)
 
     def accept_file(self, transfer_id: str) -> None:
-        worker = CallWorker(self.file_receiver.accept, transfer_id)
+        def _accept():
+            try:
+                return self.file_receiver.accept(transfer_id)
+            except TransferError as exc:
+                if exc.code == "unknown_transfer" and self.file_receiver.auto_accept:
+                    return None
+                raise
+
+        worker = CallWorker(_accept)
         worker.signals.result.connect(
-            lambda m: self.transfer_started.emit(
+            lambda m: None
+            if m is None
+            else self.transfer_started.emit(
                 {
                     "direction": "receive",
                     "transfer_id": m.transfer_id,
@@ -256,13 +370,11 @@ class ClientController(QObject):
         self._start(worker)
 
     def cancel_transfer(self, transfer_id: str) -> None:
-        """Cancel whichever side (sender or receiver) owns ``transfer_id``."""
-
         def _cancel() -> None:
             try:
                 self.file_sender.cancel(transfer_id)
                 return
-            except Exception:  # noqa: BLE001 - not an outgoing transfer
+            except Exception:  # noqa: BLE001
                 pass
             self.file_receiver.cancel(transfer_id)
 
@@ -283,7 +395,7 @@ _ERROR_TEXT = {
     "rate_limited": "Thao tác quá nhanh / thử sai quá nhiều lần. Vui lòng đợi rồi thử lại.",
     "username_taken": "Tên đăng nhập đã tồn tại.",
     "user_exists": "Tên đăng nhập đã tồn tại.",
-    "recipient_unavailable": "Người nhận hiện không trực tuyến.",
+    "recipient_unavailable": "Người nhận không tồn tại trong hệ thống.",
     "invalid_message": "Dữ liệu không hợp lệ (kiểm tra tên đăng nhập/mật khẩu 8–128 ký tự).",
     "unauthorized": "Bạn cần đăng nhập trước.",
 }
@@ -292,5 +404,3 @@ _ERROR_TEXT = {
 def describe_error(resp: dict) -> str:
     code = str(resp.get("code", ""))
     return _ERROR_TEXT.get(code) or str(resp.get("message") or code or "Yêu cầu bị từ chối.")
-
-

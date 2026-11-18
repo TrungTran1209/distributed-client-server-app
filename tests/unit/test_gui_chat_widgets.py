@@ -218,9 +218,9 @@ class TestChatView:
         assert got == []
         assert not v._error_label.isHidden()
 
-    def test_session_only_notice_present(self, qapp):
+    def test_persistent_history_notice_present(self, qapp):
         v = self._view(qapp)
-        assert "không được lưu" in v._notice.text().lower()
+        assert "lịch sử tin nhắn được lưu giữ" in v._notice.text().lower()
 
     def test_logout_signal(self, qapp):
         v = self._view(qapp)

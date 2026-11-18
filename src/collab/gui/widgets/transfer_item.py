@@ -61,7 +61,7 @@ class TransferItemWidget(QWidget):
 
     def set_status(self, text: str, error: bool = False) -> None:
         self._status.setText(text)
-        self._status.setStyleSheet("color: #f38ba8;" if error else "")
+        self._status.setStyleSheet("color: #DC2626; font-weight: 700;" if error else "color: #475569;")
 
     def set_done(self, ok: bool, path: str | None = None, code: str | None = None) -> None:
         self._finished = True
@@ -69,7 +69,7 @@ class TransferItemWidget(QWidget):
         if ok:
             self._bar.setValue(100)
             self.set_status("Hoàn tất — đã xác minh SHA-256" + (f"\n{path}" if path else ""))
-            self._status.setStyleSheet("color: #a6e3a1;")
+            self._status.setStyleSheet("color: #059669; font-weight: 700;")
             if path:
                 self._path = path
                 self._btn_open.show()

@@ -150,5 +150,7 @@ class CertGenDialog(QDialog):
 
     def _show(self, text: str, error: bool) -> None:
         self._result.setObjectName("error" if error else "")
-        self._result.setStyleSheet("color: #f38ba8;" if error else "color: #a6e3a1;")
+        self._result.setStyleSheet(
+            "color: #DC2626; font-weight: 700;" if error else "color: #059669; font-weight: 700;"
+        )
         self._result.setText(text)
