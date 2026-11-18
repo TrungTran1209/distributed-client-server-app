@@ -12,6 +12,8 @@ from typing import Any
 from .errors import ProtocolError
 
 PROTOCOL_VERSION = 1
+APP_NAME = "LumiChat"
+APP_SLUG = "lumichat"
 MAX_FRAME_SIZE = 1_048_576
 MAX_CHAT_LENGTH = 4_000
 
@@ -31,11 +33,15 @@ class MessageType(StrEnum):
     LOGOUT = "logout"
     LOGOUT_RESULT = "logout_result"
     USER_LIST = "user_list"
+    USER_DIRECTORY = "user_directory"
+    USER_DIRECTORY_RESULT = "user_directory_result"
     PRESENCE_ONLINE = "presence_online"
     PRESENCE_OFFLINE = "presence_offline"
     CHAT_SEND = "chat_send"
     CHAT_RESULT = "chat_result"
     CHAT_MESSAGE = "chat_message"
+    CHAT_HISTORY = "chat_history"
+    CHAT_HISTORY_RESULT = "chat_history_result"
     FILE_OFFER = "file_offer"
     FILE_OFFER_RESULT = "file_offer_result"
     FILE_ACCEPT = "file_accept"
@@ -66,7 +72,9 @@ REQUEST_MESSAGE_TYPES = frozenset(
         MessageType.REGISTER,
         MessageType.LOGIN,
         MessageType.LOGOUT,
+        MessageType.USER_DIRECTORY,
         MessageType.CHAT_SEND,
+        MessageType.CHAT_HISTORY,
         MessageType.FILE_OFFER,
         MessageType.FILE_ACCEPT,
         MessageType.FILE_REJECT,

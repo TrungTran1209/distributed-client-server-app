@@ -156,12 +156,13 @@ class OfflineChatHistoryAndTraceServerTests(unittest.TestCase):
         self._send(alice, MessageType.CHAT_SEND, to=None, text="Thông báo chung")
         self.assertTrue(self._recv(alice)["ok"])
 
-        # Carol registers while Alice is online -> Alice gets refreshed directory containing carol (offline)
+        # Carol registers while Alice is online -> Alice queries user_directory and sees carol (offline)
         carol = self._connect()
         self._send(carol, MessageType.REGISTER, username="carol", password="secret-password-99")
         self.assertTrue(self._recv(carol)["ok"])
+        self._send(alice, MessageType.USER_DIRECTORY)
         refreshed = self._recv(alice)
-        self.assertEqual(refreshed["type"], MessageType.USER_LIST)
+        self.assertEqual(refreshed["type"], MessageType.USER_DIRECTORY_RESULT)
         self.assertIn("carol", {u["username"] for u in refreshed["directory"]})
 
         # Now Bob comes online and fetches chat_history -> sees both broadcast and offline DM!

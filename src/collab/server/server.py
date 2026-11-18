@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
 import os
 import socket
@@ -9,7 +10,7 @@ import ssl
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from collab.common.errors import ProtocolError
 from collab.common.framing import encode_frame, recv_frame
@@ -22,6 +23,7 @@ from collab.common.protocol import (
     normalize_username,
 )
 from .auth import AuthService
+from .message_store import MessageStore
 from .ratelimit import SlidingWindowLimiter, TokenBucketLimiter
 from .router import MessageRouter
 from .sessions import Session, SessionRegistry
@@ -47,9 +49,12 @@ class CollaborationServer:
         register_window_sec: float = 60.0,
         chat_rate: float = 10.0,
         chat_burst: int = 20,
+        message_store: MessageStore | None = None,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.host, self.port = host, port
         self.tls_context, self.auth = tls_context, auth
+        self.on_trace = on_trace
         self.max_clients, self.idle_timeout = max_clients, idle_timeout
         self.auth_timeout, self.send_timeout = float(auth_timeout), float(send_timeout)
         self.max_auth_failures = max(1, int(max_auth_failures))
@@ -59,8 +64,21 @@ class CollaborationServer:
         )
         self._chat_limiter = TokenBucketLimiter(rate=chat_rate, burst=chat_burst)
         self.sessions = SessionRegistry()
-        self.router = MessageRouter(self.sessions, self._send)
-        self.transfers = TransferCoordinator(self.sessions, self._send)
+        user_store = getattr(auth, "users", None)
+        if message_store is None and user_store is not None and hasattr(user_store, "path"):
+            message_store = MessageStore(user_store.path)
+        self.message_store = message_store
+        self.router = MessageRouter(
+            self.sessions,
+            self._send,
+            user_store=user_store,
+            message_store=self.message_store,
+        )
+        self.transfers = TransferCoordinator(
+            self.sessions,
+            self._send,
+            on_trace=self._forward_trace,
+        )
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
         # Readiness signalling for embedders (e.g. the desktop GUI): `ready` is
@@ -70,6 +88,18 @@ class CollaborationServer:
         self.bound_port: int | None = None
         self._workers: set[threading.Thread] = set()
         self._workers_lock = threading.Lock()
+
+    def _forward_trace(self, event: dict[str, Any]) -> None:
+        if self.on_trace is None:
+            return
+        payload = {"ts": datetime.now().strftime("%H:%M:%S.%f")[:-3], **event}
+        try:
+            self.on_trace(payload)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _emit_trace(self, category: str, action: str, **fields: Any) -> None:
+        self._forward_trace({"category": category, "action": action, **fields})
 
     def serve_forever(self) -> None:
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -159,6 +189,7 @@ class CollaborationServer:
                 self._chat_limiter.remove(session.session_id)
                 self.transfers.on_disconnect(session.username)
                 self.router.broadcast_presence(MessageType.PRESENCE_OFFLINE, session.username)
+                self._emit_trace("SESSION", "disconnect", actor=session.username, target="-")
             try:
                 sock.close()
             except OSError:
@@ -287,14 +318,18 @@ class CollaborationServer:
                     ),
                 )
                 return True, auth_failures
+            reg_name = ""
             try:
-                ok, _ = self.auth.register(request.get("username"), request.get("password"))
+                ok, reg_name = self.auth.register(request.get("username"), request.get("password"))
                 response: dict[str, Any] = {"ok": ok}
                 if not ok:
                     response["code"] = "username_taken"
             except ProtocolError as exc:
+                ok = False
                 response = {"ok": False, "code": "invalid_message", "message": str(exc)}
             self._send_raw(sock, make_message(MessageType.REGISTER_RESULT, request_id=request_id, **response))
+            if ok and reg_name:
+                self._emit_trace("AUTH", "register", actor=reg_name, target=peer_ip)
             return True, auth_failures
         if kind == MessageType.LOGIN:
             return self._handle_login(sock, address, request, request_id, auth_failures)
@@ -356,8 +391,16 @@ class CollaborationServer:
                 session_id=new_session.session_id,
             ),
         )
-        self._send_raw(sock, make_message(MessageType.USER_LIST, users=self.router.user_list()))
+        self._send_raw(
+            sock,
+            make_message(
+                MessageType.USER_LIST,
+                users=self.router.user_list(),
+                directory=self.router.directory_list(),
+            ),
+        )
         self.router.broadcast_presence(MessageType.PRESENCE_ONLINE, username, exclude=sock)
+        self._emit_trace("AUTH", "login", actor=username, target=f"{address[0]}:{address[1]}")
         return True, 0
 
     def _dispatch_authenticated(self, sock, request, session: Session, request_id: str | None) -> None:
@@ -369,9 +412,40 @@ class CollaborationServer:
                 self._chat_limiter.remove(removed.session_id)
                 self.transfers.on_disconnect(removed.username)
                 self.router.broadcast_presence(MessageType.PRESENCE_OFFLINE, removed.username)
+                self._emit_trace("SESSION", "logout", actor=removed.username, target="-")
             return
         if kind == MessageType.CHAT_SEND:
             self._handle_chat(sock, request, session, request_id)
+            return
+        if kind == MessageType.USER_DIRECTORY:
+            self._send_raw(
+                sock,
+                make_message(
+                    MessageType.USER_DIRECTORY_RESULT,
+                    request_id=request_id,
+                    ok=True,
+                    directory=self.router.directory_list(),
+                ),
+            )
+            return
+        if kind == MessageType.CHAT_HISTORY:
+            raw_limit = request.get("limit", 300)
+            limit = int(raw_limit) if type(raw_limit) is int else 300
+            messages = (
+                self.message_store.get_history_for_user(session.username, limit=limit)
+                if self.message_store is not None
+                else []
+            )
+            self._send_raw(
+                sock,
+                make_message(
+                    MessageType.CHAT_HISTORY_RESULT,
+                    request_id=request_id,
+                    ok=True,
+                    messages=messages,
+                ),
+            )
+            self._emit_trace("CHAT", "chat_history", actor=session.username, target="-", count=len(messages))
             return
         if kind in FILE_REQUEST_TYPES:
             response = self.transfers.handle_request(session, request)
@@ -402,12 +476,20 @@ class CollaborationServer:
                 make_message(MessageType.CHAT_RESULT, request_id=request_id, ok=False, code="rate_limited"),
             )
             return
-        ok, message_id, error = self.router.chat(session.username, recipient, text)
-        result: dict[str, Any] = {"ok": ok}
-        if ok:
-            result["message_id"] = message_id
-        else:
-            result["code"] = error
+        result = self.router.route_chat(session.username, recipient, text)
+        if result.get("ok"):
+            action = (
+                "chat_offline"
+                if result.get("queued_offline")
+                else ("chat_broadcast" if recipient is None else "chat_direct")
+            )
+            self._emit_trace(
+                "CHAT",
+                action,
+                actor=session.username,
+                target=recipient or "*",
+                chars=len(text),
+            )
         self._send_raw(sock, make_message(MessageType.CHAT_RESULT, request_id=request_id, **result))
 
     def _send(self, session: Session, message: dict[str, Any]) -> None:

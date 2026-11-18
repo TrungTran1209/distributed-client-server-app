@@ -62,9 +62,11 @@ class TransferCoordinator:
         max_active_per_user: int = 3,
         max_per_pair: int | None = None,
         max_total_transfers: int = 64,
+        on_trace: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.sessions = sessions
         self.send = send
+        self.on_trace = on_trace
         self.offer_timeout = offer_timeout
         self.chunk_idle_timeout = chunk_idle_timeout
         self.ack_timeout = ack_timeout
@@ -79,6 +81,14 @@ class TransferCoordinator:
         self.max_total_transfers = max_total_transfers
         self._lock = threading.RLock()
         self._transfers: dict[str, _RelaySession] = {}
+
+    def _emit_trace(self, action: str, **fields: Any) -> None:
+        if self.on_trace is None:
+            return
+        try:
+            self.on_trace({"category": "CHUNK" if action == "file_chunk" else "FILE", "action": action, **fields})
+        except Exception:  # noqa: BLE001
+            pass
 
     def handle_request(self, session: Session, request: dict[str, Any]) -> dict[str, Any]:
         """Dispatch a file-transfer request and return the correlated response."""
@@ -193,6 +203,15 @@ class TransferCoordinator:
                 expires_in_sec=int(self.offer_timeout),
             ),
         )
+        self._emit_trace(
+            "file_offer",
+            actor=session.username,
+            target=recipient,
+            transfer_id=manifest.transfer_id,
+            filename=manifest.filename,
+            size=manifest.size,
+            total_chunks=manifest.total_chunks,
+        )
         return make_message(
             MessageType.FILE_OFFER_RESULT,
             request_id=request_id,
@@ -258,6 +277,14 @@ class TransferCoordinator:
                 by=session.username,
             ),
         )
+        self._emit_trace(
+            "file_accept",
+            actor=session.username,
+            target=rel.sender,
+            transfer_id=tid,
+            filename=rel.manifest.filename,
+            total_chunks=rel.manifest.total_chunks,
+        )
         return make_message(MessageType.FILE_ACCEPT_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     def _handle_reject(
@@ -305,13 +332,13 @@ class TransferCoordinator:
         if type(index) is not int or not isinstance(data_b64, str):
             return _fail(MessageType.FILE_CHUNK_RESULT, request_id, "invalid_chunk")
 
-        recipient_session, chunk_err = self._validate_and_advance_chunk(
+        recipient_session, chunk_meta, chunk_err = self._validate_and_advance_chunk(
             tid, session.username, index, data_b64
         )
         if chunk_err is not None:
             return _fail(MessageType.FILE_CHUNK_RESULT, request_id, chunk_err)
 
-        assert recipient_session is not None
+        assert recipient_session is not None and chunk_meta is not None
         self.send(
             recipient_session,
             make_message(
@@ -321,6 +348,13 @@ class TransferCoordinator:
                 index=index,
                 data=data_b64,
             ),
+        )
+        self._emit_trace(
+            "file_chunk",
+            actor=session.username,
+            target=recipient_session.username,
+            transfer_id=tid,
+            **chunk_meta,
         )
         return make_message(
             MessageType.FILE_CHUNK_RESULT,
@@ -336,27 +370,35 @@ class TransferCoordinator:
         sender: str,
         index: int,
         data_b64: str,
-    ) -> tuple[Session | None, str | None]:
+    ) -> tuple[Session | None, dict[str, Any] | None, str | None]:
         with self._lock:
             rel = self._transfers.get(tid)
             if rel is None or rel.sender != sender or rel.state != "accepted":
-                return None, "invalid_transfer_state"
+                return None, None, "invalid_transfer_state"
             if index != rel.next_index or index >= rel.manifest.total_chunks:
-                return None, "chunk_out_of_order"
+                return None, None, "chunk_out_of_order"
             try:
                 decoded = base64.b64decode(data_b64.encode("ascii"), validate=True)
             except (ValueError, binascii.Error):
-                return None, "invalid_chunk"
+                return None, None, "invalid_chunk"
             if len(decoded) != rel.manifest.expected_chunk_length(index):
-                return None, "invalid_chunk"
+                return None, None, "invalid_chunk"
             recipient_session = self.sessions.get_user(rel.recipient)
             if recipient_session is None:
                 self._transfers.pop(tid, None)
-                return None, "peer_disconnected"
+                return None, None, "peer_disconnected"
             rel.next_index += 1
             rel.bytes_relayed += len(decoded)
             rel.updated_at = time.monotonic()
-            return recipient_session, None
+            meta = {
+                "filename": rel.manifest.filename,
+                "chunk_index": index,
+                "total_chunks": rel.manifest.total_chunks,
+                "chunk_bytes": len(decoded),
+                "bytes_relayed": rel.bytes_relayed,
+                "total_bytes": rel.manifest.size,
+            }
+            return recipient_session, meta, None
 
     def _handle_end(
         self,
@@ -409,6 +451,15 @@ class TransferCoordinator:
                 total_chunks=rel.manifest.total_chunks,
             ),
         )
+        self._emit_trace(
+            "file_end",
+            actor=session.username,
+            target=rel.recipient,
+            transfer_id=tid,
+            filename=rel.manifest.filename,
+            size=rel.manifest.size,
+            total_chunks=rel.manifest.total_chunks,
+        )
         return make_message(MessageType.FILE_RESULT, request_id=request_id, ok=True, transfer_id=tid, stage="verifying")
 
     def _handle_ack(
@@ -437,6 +488,15 @@ class TransferCoordinator:
         sender_session = self.sessions.get_user(rel.sender)
         if sender_session is not None:
             self.send(sender_session, make_message(MessageType.FILE_STATUS, **status_fields))
+        self._emit_trace(
+            "file_ack",
+            actor=session.username,
+            target=rel.sender,
+            transfer_id=tid,
+            filename=rel.manifest.filename,
+            ok=ok,
+            code=status_fields.get("code"),
+        )
         return make_message(MessageType.FILE_ACK_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     def _handle_cancel(
@@ -469,6 +529,14 @@ class TransferCoordinator:
                     message=reason,
                 ),
             )
+        self._emit_trace(
+            "file_cancel",
+            actor=session.username,
+            target=peer_name,
+            transfer_id=tid,
+            filename=rel.manifest.filename,
+            reason=reason,
+        )
         return make_message(MessageType.FILE_CANCEL_RESULT, request_id=request_id, ok=True, transfer_id=tid)
 
     @staticmethod

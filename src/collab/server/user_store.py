@@ -80,6 +80,21 @@ class UserStore:
             ).fetchone()
         return str(row[0]) if row is not None else None
 
+    def list_usernames(self) -> list[str]:
+        """Return all registered usernames sorted alphabetically."""
+        with self._lock, closing(self._connect()) as db:
+            rows = db.execute("SELECT username FROM users ORDER BY username ASC").fetchall()
+        return [str(row[0]) for row in rows]
+
+    def user_exists(self, username: str) -> bool:
+        """Return True if `username` is a registered account."""
+        with self._lock, closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT 1 FROM users WHERE username = ? LIMIT 1",
+                (username,),
+            ).fetchone()
+        return row is not None
+
     def authenticate(self, username: str, password: str) -> bool:
         with self._lock, closing(self._connect()) as db:
             row = db.execute(
