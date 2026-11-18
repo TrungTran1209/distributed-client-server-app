@@ -1,4 +1,4 @@
-"""
+﻿"""
 Unit tests for GUI views (Phase 2).
 Run with QT_QPA_PLATFORM=offscreen.
 """
@@ -49,7 +49,7 @@ class TestHomeView:
 
         view = HomeView()
         view.set_status("Server đang chạy", "success")
-        assert view._status_label.isVisible()
+        assert not view._status_label.isHidden()
         text = view._status_label.text()
         assert "Server đang chạy" in text
 
@@ -229,7 +229,7 @@ class TestAuthView:
 
         assert not emitted, "register_requested should NOT be emitted on password mismatch"
         # Error should be visible
-        assert view._error_label.isVisible()
+        assert not view._error_label.isHidden()
         assert view._error_label.text() != ""
 
     def test_auth_view_empty_submit_prevented(self, qapp):
@@ -250,7 +250,7 @@ class TestAuthView:
 
         view = AuthView()
         view.set_error("Invalid credentials")
-        assert view._error_label.isVisible()
+        assert not view._error_label.isHidden()
         assert "Invalid credentials" in view._error_label.text()
 
     def test_auth_view_clear_error(self, qapp):
@@ -259,7 +259,7 @@ class TestAuthView:
         view = AuthView()
         view.set_error("some error")
         view.clear_error()
-        assert not view._error_label.isVisible()
+        assert view._error_label.isHidden()
 
     def test_auth_view_set_loading(self, qapp):
         from collab.gui.views.auth_view import AuthView
@@ -279,3 +279,4 @@ class TestAuthView:
         view.clear_fields()
         assert view._login_user_edit.text() == ""
         assert view._login_pass_edit.text() == ""
+
