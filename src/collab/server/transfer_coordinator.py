@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass, field
+import hashlib
 import threading
 import time
 from typing import Any, Callable
@@ -397,6 +398,8 @@ class TransferCoordinator:
                 "chunk_bytes": len(decoded),
                 "bytes_relayed": rel.bytes_relayed,
                 "total_bytes": rel.manifest.size,
+                "chunk_sha256": hashlib.sha256(decoded).hexdigest(),
+                "expected_file_sha256": rel.manifest.sha256,
             }
             return recipient_session, meta, None
 

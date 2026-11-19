@@ -108,6 +108,29 @@ class TestSeparateServerAndClientWindows:
         win.set_trace_filter("ALL")
         assert win.visible_trace_row_count() == 2
 
+        # Wireshark 3-pane inspection: select row -> updates dissection tree & hex dump
+        win._trace_table.selectRow(1)
+        win._on_packet_selected()
+        assert win._details_tree.topLevelItemCount() > 0
+        assert "Frame" in win._details_tree.topLevelItem(0).text(0)
+        assert "0000" in win._hex_edit.toPlainText()
+
+        # Test Wireshark shorthand filters
+        win._search_edit.setText("collab.chunk")
+        assert win.visible_trace_row_count() == 1
+        win._search_edit.setText("collab.auth")
+        assert win.visible_trace_row_count() == 1
+        win._search_edit.setText("")
+        assert win.visible_trace_row_count() == 2
+
+        # Test pause / resume capture
+        win._toggle_pause_capture()
+        assert win._capture_paused is True
+        ctrl.trace_recorded.emit({"action": "ping", "category": "SESSION"})
+        assert win.trace_row_count() == 2  # dropped while paused
+        win._toggle_pause_capture()
+        assert win._capture_paused is False
+
     def test_client_window_has_no_host_server_page_and_no_offer_modal(self, qapp):
         from collab.gui.client_window import ClientMainWindow
         from collab.gui.controllers.client_controller import ClientController

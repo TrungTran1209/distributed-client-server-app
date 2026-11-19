@@ -34,6 +34,17 @@ def _find_openssl() -> str:
 
 
 def _generate_self_signed_cert(directory: Path, common_name: str = "localhost") -> tuple[Path, Path]:
+    try:
+        from collab.gui.widgets.cert_gen_dialog import generate_self_signed
+        sub = directory / common_name
+        c, k = generate_self_signed(sub, common_name, ["127.0.0.1"], [common_name, "localhost"])
+        target_c = directory / f"{common_name}.crt"
+        target_k = directory / f"{common_name}.key"
+        shutil.copyfile(c, target_c)
+        shutil.copyfile(k, target_k)
+        return target_c, target_k
+    except Exception:
+        pass
     cert_path = directory / f"{common_name}.crt"
     key_path = directory / f"{common_name}.key"
     subprocess.run(

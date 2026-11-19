@@ -252,6 +252,8 @@ class OfflineChatHistoryAndTraceServerTests(unittest.TestCase):
         # Security invariant: password must NEVER appear anywhere in trace events
         serialized = repr(self.traces)
         self.assertNotIn(secret, serialized)
+        self.assertNotIn(payload.decode("utf-8"), serialized)
+        self.assertNotIn("raw_payload_preview", serialized)
 
 
 if __name__ == "__main__":

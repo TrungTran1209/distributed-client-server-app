@@ -1,11 +1,12 @@
-"""One row in the Transfer Center. Progress is driven only by real FileSender/FileReceiver callbacks."""
+"""One row in the Transfer Center with modern Figma card styling."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Signal
 from PySide6.QtGui import QDesktopServices
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QProgressBar, QPushButton, QVBoxLayout, QWidget
 
 from .formatting import describe_transfer_error, human_size, sanitize
 
@@ -18,19 +19,43 @@ class TransferItemWidget(QWidget):
         self.transfer_id, self.direction = transfer_id, direction
         self._finished = False
         self._path: str | None = None
+
+        card = QFrame()
+        card.setObjectName("card")
+        card.setStyleSheet(
+            "QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 6px; }"
+        )
+
+        icon = "📤" if direction == "send" else "📥"
         arrow = "Gửi tới" if direction == "send" else "Nhận từ"
-        self._title = QLabel(f"{sanitize(filename)}   ·   {arrow} {sanitize(peer) or '…'}")
-        self._title.setStyleSheet("font-weight: 600;")
+        self._title = QLabel(f"{icon} {sanitize(filename)}   ·   {arrow} {sanitize(peer) or '…'}")
+        self._title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 13px;")
+
         self._bar = QProgressBar()
         self._bar.setRange(0, 100)
+        self._bar.setStyleSheet("QProgressBar { height: 14px; border-radius: 7px; }")
+
         self._bytes = QLabel("")
         self._bytes.setObjectName("hint")
         self._status = QLabel(
             "Đang chờ người nhận chấp nhận…" if direction == "send" else "Đang chờ bắt đầu nhận…"
         )
+        self._status.setStyleSheet("color: #475569; font-size: 11px;")
+
         self._btn_cancel = QPushButton("Hủy")
+        self._btn_cancel.setStyleSheet(
+            "QPushButton { background: #FEE2E2; color: #B91C1C; border: 1px solid #FECACA; "
+            "border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 11px; }"
+            "QPushButton:hover { background: #FCA5A5; }"
+        )
         self._btn_cancel.clicked.connect(lambda: self.cancel_requested.emit(self.transfer_id))
+
         self._btn_open = QPushButton("Mở thư mục")
+        self._btn_open.setStyleSheet(
+            "QPushButton { background: #EEF2FF; color: #4338CA; border: 1px solid #C7D2FE; "
+            "border-radius: 6px; padding: 4px 10px; font-weight: 600; font-size: 11px; }"
+            "QPushButton:hover { background: #E0E7FF; }"
+        )
         self._btn_open.clicked.connect(self._open_folder)
         self._btn_open.hide()
 
@@ -39,10 +64,17 @@ class TransferItemWidget(QWidget):
         foot.addWidget(self._bytes)
         foot.addWidget(self._btn_open)
         foot.addWidget(self._btn_cancel)
+
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(10, 8, 10, 8)
+        card_lay.setSpacing(6)
+        card_lay.addWidget(self._title)
+        card_lay.addWidget(self._bar)
+        card_lay.addLayout(foot)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(self._title)
-        layout.addWidget(self._bar)
-        layout.addLayout(foot)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.addWidget(card)
 
     # ----------------------------------------------------------------- API
     def update_progress(self, progress) -> None:
