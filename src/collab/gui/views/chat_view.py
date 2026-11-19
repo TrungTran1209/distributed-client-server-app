@@ -42,6 +42,7 @@ class ChatView(QWidget):
     send_requested = Signal(str, object)
     file_send_requested = Signal(str, object)
     logout_requested = Signal()
+    disconnect_logout_requested = Signal()
     transfers_panel_requested = Signal()
     reconnect_requested = Signal()
 
@@ -84,13 +85,18 @@ class ChatView(QWidget):
         self._banner.setObjectName("banner")
         self._banner_text = QLabel("")
         self._banner_text.setObjectName("banner")
-        self._btn_reconnect = QPushButton("Kết nối lại")
+        self._banner_text.setWordWrap(True)
+        self._btn_reconnect = QPushButton("🔄 Kết nối & Đăng nhập lại")
         self._btn_reconnect.setObjectName("primary")
         self._btn_reconnect.clicked.connect(self.reconnect_requested)
+        self._btn_disconnect_logout = QPushButton("🚪 Đăng xuất / Đổi máy chủ")
+        self._btn_disconnect_logout.clicked.connect(self.disconnect_logout_requested)
         banner_lay = QHBoxLayout(self._banner)
-        banner_lay.setContentsMargins(8, 4, 8, 4)
+        banner_lay.setContentsMargins(10, 6, 10, 6)
+        banner_lay.setSpacing(8)
         banner_lay.addWidget(self._banner_text, 1)
         banner_lay.addWidget(self._btn_reconnect)
+        banner_lay.addWidget(self._btn_disconnect_logout)
         self._banner.hide()
 
         # Left sidebar: Online & Offline User Tables
@@ -225,7 +231,9 @@ class ChatView(QWidget):
         self._update_conversation_header(self._users.get_selected_recipient())
 
     def show_disconnected_banner(self, reason: str) -> None:
-        self._banner_text.setText(f"Mất kết nối: {sanitize(reason)}")
+        self._banner_text.setText(
+            f"Mất kết nối máy chủ: {sanitize(reason)} — Phiên đã hết hiệu lực (bạn vẫn xem được lịch sử chat)."
+        )
         self._banner.show()
         self._set_enabled(False)
 

@@ -99,7 +99,7 @@ QPushButton {{
     color: {TEXT};
     border: 1px solid {BORDER_STRONG};
     border-radius: 9px;
-    padding: 8px 16px;
+    padding: 6px 12px;
     font-weight: 600;
     font-size: 13px;
 }}
@@ -179,7 +179,7 @@ QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QComboBox {{
     color: {TEXT};
     border: 1px solid {BORDER_STRONG};
     border-radius: 9px;
-    padding: 7px 11px;
+    padding: 5px 9px;
     selection-background-color: {ACCENT};
     selection-color: #FFFFFF;
 }}
