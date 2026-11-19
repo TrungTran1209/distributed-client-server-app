@@ -197,11 +197,13 @@ class TestClientDisconnectUX:
         ctrl.auth_succeeded.emit("alice")
         assert win.current_page() == "chat"
 
-        # Server drops connection
-        ctrl.connection_lost.emit("Máy chủ đã dừng")
+        # Server drops connection with raw socket EOF text -> clean natural Vietnamese, no '&' mnemonic bug
+        ctrl.connection_lost.emit("connection closed while reading frame")
         assert not win.chat_view._banner.isHidden()
         assert not win.chat_view._btn_reconnect.isHidden()
         assert not win.chat_view._btn_disconnect_logout.isHidden()
+        assert "&" not in win.chat_view._btn_reconnect.text()
+        assert "reading frame" not in win.chat_view._banner_text.text().lower()
 
         # Reconnect succeeds -> moves to auth page with username pre-filled, password empty
         ctrl.connected.emit({"server_name": "LumiChat"})

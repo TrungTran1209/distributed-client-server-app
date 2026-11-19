@@ -128,11 +128,15 @@ class ClientMainWindow(QMainWindow):
     # ------------------------------------------------------------- connect
     def _begin_connect(self, host: str, port: int, ca: str, download_dir: str) -> None:
         if ca and not os.path.isfile(ca):
+            self.chat_view._btn_reconnect.setText("Kết nối lại")
+            self.chat_view._btn_reconnect.setEnabled(True)
             self.connect_view.set_error(f"Không tìm thấy file chứng chỉ CA: {ca}")
             return
         try:
             ctx = create_client_context(ca or None)
         except Exception as exc:  # noqa: BLE001
+            self.chat_view._btn_reconnect.setText("Kết nối lại")
+            self.chat_view._btn_reconnect.setEnabled(True)
             self.connect_view.set_error(f"Không đọc được chứng chỉ CA: {exc}")
             return
         self._endpoint = (host, port, ca, download_dir)
@@ -147,6 +151,7 @@ class ClientMainWindow(QMainWindow):
         if self._endpoint is None:
             self.show_connect()
             return
+        self.chat_view._btn_reconnect.setText("Đang kết nối…")
         self.chat_view._btn_reconnect.setEnabled(False)
         self._begin_connect(*self._endpoint)
 
@@ -174,6 +179,7 @@ class ClientMainWindow(QMainWindow):
 
     def _on_connected(self, _welcome: dict) -> None:
         self.connect_view.set_connecting(False)
+        self.chat_view._btn_reconnect.setText("Kết nối lại")
         self.chat_view._btn_reconnect.setEnabled(True)
         host, port = self._endpoint[:2] if self._endpoint else ("?", 0)
         self._conn_label.setText(f"🟢 Đã kết nối {host}:{port} (TLS)")
@@ -182,11 +188,12 @@ class ClientMainWindow(QMainWindow):
         if self._last_username:
             self.auth_view.clear_fields()
             self.auth_view.show_login_tab(self._last_username)
-            self.auth_view.set_info("Đã kết nối lại máy chủ — vui lòng nhập mật khẩu để đăng nhập.")
+            self.auth_view.set_info("Đã kết nối lại. Nhập mật khẩu để tiếp tục.")
         self.show_auth()
 
     def _on_connection_lost(self, reason: str) -> None:
         self.connect_view.set_connecting(False)
+        self.chat_view._btn_reconnect.setText("Kết nối lại")
         self.chat_view._btn_reconnect.setEnabled(True)
         self._conn_label.setText("🔴 Mất kết nối")
         if self.current_page() == "chat":

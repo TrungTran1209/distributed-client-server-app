@@ -86,16 +86,18 @@ class ChatView(QWidget):
         self._banner = QWidget()
         self._banner.setObjectName("banner")
         self._banner_text = QLabel("")
-        self._banner_text.setObjectName("banner")
+        self._banner_text.setStyleSheet(
+            "color: #B91C1C; font-weight: 600; background: transparent; border: none;"
+        )
         self._banner_text.setWordWrap(True)
-        self._btn_reconnect = QPushButton("Kết nối & Đăng nhập lại")
+        self._btn_reconnect = QPushButton("Kết nối lại")
         self._btn_reconnect.setObjectName("primary")
         self._btn_reconnect.clicked.connect(self.reconnect_requested)
-        self._btn_disconnect_logout = QPushButton("Đăng xuất / Đổi máy chủ")
+        self._btn_disconnect_logout = QPushButton("Đổi máy chủ")
         self._btn_disconnect_logout.clicked.connect(self.disconnect_logout_requested)
         banner_lay = QHBoxLayout(self._banner)
-        banner_lay.setContentsMargins(10, 6, 10, 6)
-        banner_lay.setSpacing(8)
+        banner_lay.setContentsMargins(12, 8, 12, 8)
+        banner_lay.setSpacing(10)
         banner_lay.addWidget(self._banner_text, 1)
         banner_lay.addWidget(self._btn_reconnect)
         banner_lay.addWidget(self._btn_disconnect_logout)
@@ -232,10 +234,34 @@ class ChatView(QWidget):
         self._online_label.setText(f"{n_on} trực tuyến · {n_off} ngoại tuyến")
         self._update_conversation_header(self._users.get_selected_recipient())
 
+    @staticmethod
+    def _friendly_disconnect_text(reason: str) -> str:
+        raw = sanitize(reason).strip()
+        low = raw.lower()
+        if not raw or any(
+            tok in low
+            for tok in (
+                "connection closed",
+                "reading frame",
+                "eof",
+                "broken pipe",
+                "reset by peer",
+                "forcibly closed",
+                "winerror",
+                "heartbeat failed",
+            )
+        ):
+            return "Mất kết nối tới máy chủ. Nhấn Kết nối lại để tiếp tục nhắn tin."
+        if "refused" in low or "từ chối" in low:
+            return "Không thể kết nối tới máy chủ. Kiểm tra xem máy chủ đã chạy chưa."
+        if "timeout" in low or "thời gian" in low:
+            return "Máy chủ không phản hồi. Vui lòng thử kết nối lại."
+        return f"Mất kết nối: {raw}"
+
     def show_disconnected_banner(self, reason: str) -> None:
-        self._banner_text.setText(
-            f"Mất kết nối máy chủ: {sanitize(reason)} — Phiên đã hết hiệu lực (bạn vẫn xem được lịch sử chat)."
-        )
+        self._banner_text.setText(self._friendly_disconnect_text(reason))
+        self._btn_reconnect.setText("Kết nối lại")
+        self._btn_reconnect.setEnabled(True)
         self._banner.show()
         self._set_enabled(False)
 
