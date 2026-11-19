@@ -18,8 +18,8 @@ from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QTableWidget,
@@ -43,6 +44,7 @@ from PySide6.QtWidgets import (
 from .controllers.server_controller import ServerController
 from .styles.theme import APP_BRAND
 from .widgets.cert_gen_dialog import CertGenDialog
+from .widgets.export_packets_dialog import ExportPacketsDialog, parse_packet_range
 from .widgets.formatting import format_hex_dump, human_size, sanitize
 
 _MAX_TRACE_ROWS = 3000
@@ -63,7 +65,14 @@ def _spin(low: int, high: int, value: int) -> QSpinBox:
     box = QSpinBox()
     box.setRange(low, high)
     box.setValue(value)
+    box.setMinimumHeight(32)
     return box
+
+
+def _field_label(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet("color: #475569; font-size: 12px; font-weight: 700;")
+    return lbl
 
 
 def _kpi_card(title: str, initial: str, accent_hex: str) -> tuple[QFrame, QLabel]:
@@ -122,27 +131,52 @@ class ServerMainWindow(QMainWindow):
         self._port_spin = _spin(1, 65535, 37021)
         self._udp_spin = _spin(1, 65535, 37020)
         self._advertise_edit = QLineEdit()
-        self._advertise_edit.setPlaceholderText("Tự phát hiện IP LAN nếu để trống")
+        self._advertise_edit.setPlaceholderText("Tự phát hiện IP LAN")
         self._cert_edit = QLineEdit("certs/server.crt" if Path("certs/server.crt").exists() else "")
         self._key_edit = QLineEdit("certs/server.key" if Path("certs/server.key").exists() else "")
         self._db_edit = QLineEdit("data/users.sqlite3")
         self._idle_spin = _spin(10, 3600, 90)
         self._auth_spin = _spin(5, 600, 60)
+        for line_edit in (
+            self._host_edit,
+            self._advertise_edit,
+            self._cert_edit,
+            self._key_edit,
+            self._db_edit,
+        ):
+            line_edit.setMinimumHeight(32)
 
-        form = QFormLayout()
-        form.addRow("Bind IP", self._host_edit)
-        form.addRow("Cổng TCP/TLS", self._port_spin)
-        form.addRow("Cổng UDP", self._udp_spin)
-        form.addRow("IP công bố", self._advertise_edit)
-        form.addRow("Chứng chỉ (.crt)", self._file_row(self._cert_edit, "Chọn chứng chỉ", "Chứng chỉ (*.crt *.pem)"))
-        form.addRow("Khóa riêng (.key)", self._file_row(self._key_edit, "Chọn khóa riêng", "Khóa (*.key *.pem)"))
-        form.addRow("SQLite DB", self._db_edit)
-        form.addRow("Idle timeout (s)", self._idle_spin)
-        form.addRow("Auth timeout (s)", self._auth_spin)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(6)
+        grid.addWidget(_field_label("Bind IP"), 0, 0)
+        grid.addWidget(_field_label("IP công bố (LAN)"), 0, 1)
+        grid.addWidget(self._host_edit, 1, 0)
+        grid.addWidget(self._advertise_edit, 1, 1)
+
+        grid.addWidget(_field_label("Cổng TCP/TLS"), 2, 0)
+        grid.addWidget(_field_label("Cổng UDP Discovery"), 2, 1)
+        grid.addWidget(self._port_spin, 3, 0)
+        grid.addWidget(self._udp_spin, 3, 1)
+
+        grid.addWidget(_field_label("Idle timeout (giây)"), 4, 0)
+        grid.addWidget(_field_label("Auth timeout (giây)"), 4, 1)
+        grid.addWidget(self._idle_spin, 5, 0)
+        grid.addWidget(self._auth_spin, 5, 1)
+
+        grid.addWidget(_field_label("Chứng chỉ TLS (.crt)"), 6, 0, 1, 2)
+        grid.addWidget(self._file_row(self._cert_edit, "Chọn chứng chỉ", "Chứng chỉ (*.crt *.pem)"), 7, 0, 1, 2)
+
+        grid.addWidget(_field_label("Khóa riêng (.key)"), 8, 0, 1, 2)
+        grid.addWidget(self._file_row(self._key_edit, "Chọn khóa riêng", "Khóa (*.key *.pem)"), 9, 0, 1, 2)
+
+        grid.addWidget(_field_label("Cơ sở dữ liệu (SQLite DB)"), 10, 0, 1, 2)
+        grid.addWidget(self._file_row(self._db_edit, "Chọn file SQLite DB", "SQLite (*.sqlite3 *.db)"), 11, 0, 1, 2)
 
         cfg_box = QGroupBox("Cấu hình")
         cfg_lay = QVBoxLayout(cfg_box)
-        cfg_lay.addLayout(form)
+        cfg_lay.setSpacing(8)
+        cfg_lay.addLayout(grid)
 
         self._error_label = QLabel("")
         self._error_label.setObjectName("error")
@@ -150,23 +184,32 @@ class ServerMainWindow(QMainWindow):
         self._error_label.hide()
         cfg_lay.addWidget(self._error_label)
 
-        self._btn_certgen = QPushButton("Tạo chứng chỉ TLS…")
+        self._btn_certgen = QPushButton("Tạo chứng chỉ TLS (SAN)…")
+        self._btn_certgen.setMinimumHeight(34)
         self._btn_certgen.clicked.connect(self._open_certgen)
         self._btn_start = QPushButton("Khởi động")
         self._btn_start.setObjectName("primary")
+        self._btn_start.setMinimumHeight(36)
         self._btn_start.clicked.connect(self._on_start)
         self._btn_stop = QPushButton("Dừng")
         self._btn_stop.setObjectName("danger")
+        self._btn_stop.setMinimumHeight(36)
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._on_stop)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
         btn_row.addWidget(self._btn_start)
         btn_row.addWidget(self._btn_stop)
         cfg_lay.addWidget(self._btn_certgen)
         cfg_lay.addLayout(btn_row)
 
-        users_box = QGroupBox("Người dùng")
+        cfg_scroll = QScrollArea()
+        cfg_scroll.setWidgetResizable(True)
+        cfg_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        cfg_scroll.setWidget(cfg_box)
+
+        users_box = QGroupBox("Người dùng (Trực tuyến · Ngoại tuyến)")
         self._users_table = QTableWidget(0, 3)
         self._users_table.setHorizontalHeaderLabels(["Tài khoản", "Trạng thái", "Địa chỉ kết nối"])
         self._users_table.verticalHeader().setVisible(False)
@@ -181,18 +224,25 @@ class ServerMainWindow(QMainWindow):
 
         self._log_edit = QTextEdit()
         self._log_edit.setReadOnly(True)
-        self._log_edit.setMaximumHeight(90)
         self._log_edit.setPlaceholderText("Nhật ký hệ thống máy chủ…")
 
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+        left_splitter.addWidget(cfg_scroll)
+        left_splitter.addWidget(users_box)
+        left_splitter.addWidget(self._log_edit)
+        left_splitter.setStretchFactor(0, 5)
+        left_splitter.setStretchFactor(1, 2)
+        left_splitter.setStretchFactor(2, 1)
+        left_splitter.setSizes([420, 150, 90])
+
         left_col = QWidget()
+        left_col.setMinimumWidth(360)
         left_lay = QVBoxLayout(left_col)
         left_lay.setContentsMargins(0, 0, 8, 0)
-        left_lay.addWidget(cfg_box)
-        left_lay.addWidget(users_box, 1)
-        left_lay.addWidget(self._log_edit)
+        left_lay.addWidget(left_splitter, 1)
 
         # ------------------------------------------------ Right Column: TLS Application Inspector
-        sniffer_box = QGroupBox("Hoạt động")
+        sniffer_box = QGroupBox("Hoạt động (TLS · Chunk Inspector)")
         sniffer_lay = QVBoxLayout(sniffer_box)
         sniffer_lay.setSpacing(8)
 
@@ -256,7 +306,7 @@ class ServerMainWindow(QMainWindow):
         self._trace_table.verticalHeader().setVisible(False)
         self._trace_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._trace_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._trace_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._trace_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._trace_table.itemSelectionChanged.connect(self._on_packet_selected)
 
         th = self._trace_table.horizontalHeader()
@@ -347,7 +397,10 @@ class ServerMainWindow(QMainWindow):
         row = QWidget()
         lay = QHBoxLayout(row)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         btn = QPushButton("Chọn…")
+        btn.setFixedWidth(74)
+        btn.setMinimumHeight(32)
 
         def _pick() -> None:
             path, _ = QFileDialog.getOpenFileName(self, title, "", f"{flt};;Tất cả (*)")
@@ -355,7 +408,7 @@ class ServerMainWindow(QMainWindow):
                 edit.setText(path)
 
         btn.clicked.connect(_pick)
-        lay.addWidget(edit)
+        lay.addWidget(edit, 1)
         lay.addWidget(btn)
         return row
 
@@ -611,10 +664,12 @@ class ServerMainWindow(QMainWindow):
 
     # ------------------------------------------------ Packet Inspection (Panes 2 & 3)
     def _on_packet_selected(self) -> None:
-        selected_rows = self._trace_table.selectedItems()
-        if not selected_rows:
+        self._update_stats_badge()
+        rows = self.selected_trace_rows()
+        if not rows:
             return
-        row = selected_rows[0].row()
+        current = self._trace_table.currentRow()
+        row = current if current in rows else rows[-1]
         if row < 0 or row >= len(self._packet_records):
             return
 
@@ -786,11 +841,19 @@ class ServerMainWindow(QMainWindow):
             self._trace_table.setRowHidden(row, not self._row_matches_filter(row))
         self._update_stats_badge()
 
+    def selected_trace_rows(self) -> list[int]:
+        """Return sorted unique row indices currently selected in the packet table."""
+        model = self._trace_table.selectionModel()
+        if model is None:
+            return []
+        return sorted({idx.row() for idx in model.selectedRows()})
+
     def _update_stats_badge(self) -> None:
         total = self._trace_table.rowCount()
         visible = self.visible_trace_row_count()
+        selected = len(self.selected_trace_rows())
         self._stats_badge.setText(
-            f"Bắt được: {total} gói | Hiển thị: {visible} | Chunks: {self._chunk_count}"
+            f"Bắt được: {total} gói | Hiển thị: {visible} | Đã chọn: {selected} | Chunks: {self._chunk_count}"
         )
 
     def clear_traces(self) -> None:
@@ -810,12 +873,52 @@ class ServerMainWindow(QMainWindow):
             1 for r in range(self._trace_table.rowCount()) if not self._trace_table.isRowHidden(r)
         )
 
-    def _export_csv(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Xuất danh sách bắt gói tin Wireshark ra CSV", "wireshark_capture.csv", "CSV (*.csv)"
+    def resolve_export_rows(self, mode: str, range_text: str = "") -> list[int]:
+        """Resolve which table row indices match the Wireshark export scope."""
+        total = self._trace_table.rowCount()
+        if mode == "selected":
+            return self.selected_trace_rows()
+        if mode == "displayed":
+            return [r for r in range(total) if not self._trace_table.isRowHidden(r)]
+        if mode == "range":
+            valid_nos = {
+                int(rec.get("packet_no", idx + 1))
+                for idx, rec in enumerate(self._packet_records)
+            }
+            wanted = parse_packet_range(range_text, valid_nos)
+            return [
+                idx
+                for idx, rec in enumerate(self._packet_records)
+                if int(rec.get("packet_no", idx + 1)) in wanted
+            ]
+        return list(range(total))
+
+    def _choose_export_rows(self, fmt: str) -> list[int] | None:
+        total = self._trace_table.rowCount()
+        if total == 0:
+            QMessageBox.information(self, f"Xuất {fmt}", "Chưa có gói tin nào để xuất.")
+            return None
+        valid_nos = {
+            int(rec.get("packet_no", idx + 1))
+            for idx, rec in enumerate(self._packet_records)
+        }
+        dlg = ExportPacketsDialog(
+            export_format=fmt,
+            total_count=total,
+            displayed_count=self.visible_trace_row_count(),
+            selected_count=len(self.selected_trace_rows()),
+            valid_packet_nos=valid_nos,
+            parent=self,
         )
-        if not path:
-            return
+        if dlg.exec() != ExportPacketsDialog.DialogCode.Accepted:
+            return None
+        rows = self.resolve_export_rows(dlg.selected_mode(), dlg.range_text())
+        if not rows:
+            QMessageBox.information(self, f"Xuất {fmt}", "Không có gói tin nào trong phạm vi bạn chọn.")
+            return None
+        return rows
+
+    def write_packets_csv(self, path: str, rows: list[int]) -> None:
         headers = [
             self._trace_table.horizontalHeaderItem(c).text()
             for c in range(self._trace_table.columnCount())
@@ -823,29 +926,47 @@ class ServerMainWindow(QMainWindow):
         with open(path, "w", newline="", encoding="utf-8-sig") as f:
             writer = csv.writer(f)
             writer.writerow(headers)
-            for r in range(self._trace_table.rowCount()):
-                writer.writerow(
-                    [
-                        (self._trace_table.item(r, c).text() if self._trace_table.item(r, c) else "")
-                        for c in range(self._trace_table.columnCount())
-                    ]
-                )
+            for r in rows:
+                if 0 <= r < self._trace_table.rowCount():
+                    writer.writerow(
+                        [
+                            (self._trace_table.item(r, c).text() if self._trace_table.item(r, c) else "")
+                            for c in range(self._trace_table.columnCount())
+                        ]
+                    )
 
-    def _export_json(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Xuất gói tin Wireshark ra JSON", "wireshark_packets.json", "JSON (*.json)"
-        )
-        if not path:
-            return
-        # Filter out binary preview from JSON serialization
+    def write_packets_json(self, path: str, rows: list[int]) -> None:
         clean_records = []
-        for r in self._packet_records:
-            entry = dict(r)
-            if "raw_payload_preview" in entry:
-                entry.pop("raw_payload_preview")
-            clean_records.append(entry)
+        for r in rows:
+            if 0 <= r < len(self._packet_records):
+                entry = {
+                    k: v
+                    for k, v in self._packet_records[r].items()
+                    if k != "raw_payload_preview"
+                }
+                clean_records.append(entry)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(clean_records, f, ensure_ascii=False, indent=2)
+
+    def _export_csv(self) -> None:
+        rows = self._choose_export_rows("CSV")
+        if not rows:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Xuất {len(rows)} gói tin ra CSV", "wireshark_capture.csv", "CSV (*.csv)"
+        )
+        if path:
+            self.write_packets_csv(path, rows)
+
+    def _export_json(self) -> None:
+        rows = self._choose_export_rows("JSON")
+        if not rows:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Xuất {len(rows)} gói tin ra JSON", "wireshark_packets.json", "JSON (*.json)"
+        )
+        if path:
+            self.write_packets_json(path, rows)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if self.server_ctrl.is_running() and self.server_ctrl.client_count():

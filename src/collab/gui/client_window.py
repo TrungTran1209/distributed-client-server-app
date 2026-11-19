@@ -40,6 +40,7 @@ class ClientMainWindow(QMainWindow):
         self._endpoint: tuple[str, int, str, str] | None = None
         self._download_root = Path("downloads")
         self._register_user = ""
+        self._last_username = ""
 
         self.connect_view = ConnectView()
         self.connect_view._btn_back.hide()  # Client starts directly on Connect
@@ -91,6 +92,7 @@ class ClientMainWindow(QMainWindow):
         self.chat_view.send_requested.connect(lambda text, to: self.client_ctrl.send_chat(to, text))
         self.chat_view.file_send_requested.connect(self.client_ctrl.send_file)
         self.chat_view.logout_requested.connect(self._logout)
+        self.chat_view.disconnect_logout_requested.connect(self._disconnect_to_connect_page)
         self.chat_view.transfers_panel_requested.connect(
             lambda: self._dock.setVisible(not self._dock.isVisible())
         )
@@ -177,6 +179,10 @@ class ClientMainWindow(QMainWindow):
         self._conn_label.setText(f"🟢 Đã kết nối {host}:{port} (TLS)")
         self.auth_view.clear_error()
         self.auth_view.set_loading(False)
+        if self._last_username:
+            self.auth_view.clear_fields()
+            self.auth_view.show_login_tab(self._last_username)
+            self.auth_view.set_info("Đã kết nối lại máy chủ — vui lòng nhập mật khẩu để đăng nhập.")
         self.show_auth()
 
     def _on_connection_lost(self, reason: str) -> None:
@@ -200,6 +206,7 @@ class ClientMainWindow(QMainWindow):
         self.client_ctrl.register(username, password)
 
     def _on_auth_succeeded(self, username: str) -> None:
+        self._last_username = username
         self.auth_view.set_loading(False)
         self.auth_view.clear_fields()
         self.client_ctrl.set_download_directory_for_user(username, self._download_root)
@@ -226,16 +233,21 @@ class ClientMainWindow(QMainWindow):
         self.client_ctrl.disconnect()
         self.show_connect()
 
+    def _disconnect_to_connect_page(self) -> None:
+        self.client_ctrl.disconnect()
+        self._last_username = ""
+        self.chat_view.clear_messages()
+        self.chat_view.hide_disconnected_banner()
+        self._conn_label.setText("Chưa kết nối máy chủ")
+        self.show_connect()
+
     def _logout(self) -> None:
         if (
             QMessageBox.question(self, "Đăng xuất", "Đăng xuất khỏi tài khoản hiện tại?")
             != QMessageBox.StandardButton.Yes
         ):
             return
-        self.client_ctrl.disconnect()
-        self.chat_view.clear_messages()
-        self._conn_label.setText("Chưa kết nối")
-        self.show_connect()
+        self._disconnect_to_connect_page()
 
     def _on_chat_sent(self, to, text: str) -> None:
         self.chat_view.add_message({"from": self.client_ctrl.username, "to": to, "text": text})

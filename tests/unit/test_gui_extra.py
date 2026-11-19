@@ -120,10 +120,11 @@ class TestMainWindowFlows:
         offer = {"transfer_id": "t1", "from": "bob", "filename": "f", "size": 1, "total_chunks": 1,
                  "expires_in_sec": 60}
         w.client_ctrl.transfer_offer.emit(offer)
-        dialog = w._offers["t1"]
+        assert w.pending_offer_count() == 1
+        assert w.transfer_manager.has_transfer("t1")
         w.client_ctrl.transfer_done.emit("t1", False, {"ok": False, "code": "transfer_cancelled"})
-        assert not dialog._btn_accept.isEnabled()
         assert w.pending_offer_count() == 0
+        assert w.transfer_manager._items["t1"].is_finished()
 
     def test_transfer_started_and_done_update_center(self, qapp):
         w = _window(qapp)
