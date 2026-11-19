@@ -16,7 +16,7 @@ def main() -> None:  # pragma: no cover - requires display
     app.setApplicationName(f"{APP_BRAND} Client")
     app.setOrganizationName(APP_BRAND)
     apply_theme(app)
-    win = ClientMainWindow(ClientController(auto_accept=True))
+    win = ClientMainWindow(ClientController(auto_accept=False))
     win.show()
     sys.exit(app.exec())
 

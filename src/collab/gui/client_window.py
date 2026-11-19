@@ -5,6 +5,7 @@ Persistent Chat History, and Zero-Prompt Automatic File Transfer.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -37,6 +38,7 @@ class ClientMainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_BRAND} — Trò chuyện & Chia sẻ tệp nhanh")
         self.setMinimumSize(1040, 680)
         self._endpoint: tuple[str, int, str, str] | None = None
+        self._download_root = Path("downloads")
         self._register_user = ""
 
         self.connect_view = ConnectView()
@@ -50,7 +52,7 @@ class ClientMainWindow(QMainWindow):
         self.setCentralWidget(self._stack)
 
         self.transfer_manager = TransferManagerWidget()
-        self._dock = QDockWidget("📦 Tiến độ Truyền tệp (Tự động lưu & kiểm tra SHA-256)", self)
+        self._dock = QDockWidget("Lịch sử tệp", self)
         self._dock.setWidget(self.transfer_manager)
         self._dock.setMinimumWidth(340)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock)
@@ -94,6 +96,9 @@ class ClientMainWindow(QMainWindow):
         )
         self.chat_view.reconnect_requested.connect(self._reconnect)
         self.transfer_manager.cancel_requested.connect(self._confirm_cancel)
+        self.transfer_manager.download_requested.connect(self.client_ctrl.accept_file)
+        self.chat_view.file_download_requested.connect(self.client_ctrl.accept_file)
+        self.chat_view._users.recipient_changed.connect(self.transfer_manager.set_conversation)
 
     def _wire_client(self) -> None:
         c = self.client_ctrl
@@ -104,6 +109,7 @@ class ClientMainWindow(QMainWindow):
         c.auth_succeeded.connect(self._on_auth_succeeded)
         c.auth_failed.connect(self._on_auth_failed)
         c.register_finished.connect(self._on_register_finished)
+        c.transfer_offer.connect(self._on_transfer_offer)
         c.directory_updated.connect(self.chat_view.set_directory)
         c.history_loaded.connect(self.chat_view.load_history)
         c.message_received.connect(self.chat_view.add_message)
@@ -128,6 +134,7 @@ class ClientMainWindow(QMainWindow):
             self.connect_view.set_error(f"Không đọc được chứng chỉ CA: {exc}")
             return
         self._endpoint = (host, port, ca, download_dir)
+        self._download_root = Path(download_dir).expanduser()
         self.connect_view.clear_error()
         self.connect_view.set_connecting(True)
         self._conn_label.setText(f"Đang kết nối tới {host}:{port}…")
@@ -195,6 +202,7 @@ class ClientMainWindow(QMainWindow):
     def _on_auth_succeeded(self, username: str) -> None:
         self.auth_view.set_loading(False)
         self.auth_view.clear_fields()
+        self.client_ctrl.set_download_directory_for_user(username, self._download_root)
         host, port = self._endpoint[:2] if self._endpoint else ("?", 0)
         self.chat_view.clear_messages()
         self.chat_view.set_connection_info(host, port, username)
@@ -233,16 +241,39 @@ class ClientMainWindow(QMainWindow):
         self.chat_view.add_message({"from": self.client_ctrl.username, "to": to, "text": text})
 
     # ----------------------------------------------------------- transfers
+    def _on_transfer_offer(self, offer: dict) -> None:
+        self.transfer_manager.add_incoming_offer(
+            str(offer["transfer_id"]),
+            str(offer["filename"]),
+            str(offer.get("from", "")),
+        )
+        self.chat_view.add_file_message(
+            str(offer["transfer_id"]),
+            str(offer["filename"]),
+            int(offer.get("size", 0)),
+            str(offer.get("from", "")),
+            is_own=False,
+        )
+
     def _on_transfer_started(self, info: dict) -> None:
         tid, name = info["transfer_id"], info["filename"]
         if info["direction"] == "send":
             self.transfer_manager.add_outgoing(tid, name, info["peer"])
+            self.chat_view.add_file_message(
+                tid,
+                name,
+                int(info.get("size", 0)),
+                info["peer"],
+                is_own=True,
+                recipient=info["peer"],
+            )
         else:
             self.transfer_manager.add_incoming(tid, name, info.get("peer", ""))
-        self._dock.show()
 
     def _on_transfer_done(self, tid: str, ok: bool, detail: dict) -> None:
         self.transfer_manager.set_transfer_done(tid, ok, detail)
+        if ok:
+            self.chat_view.mark_file_done(tid)
         if ok and detail.get("path"):
             msg = f"Đã nhận tệp hoàn tất (SHA-256 khớp): {detail.get('filename')}"
         elif ok:

@@ -131,17 +131,17 @@ class TestSeparateServerAndClientWindows:
         win._toggle_pause_capture()
         assert win._capture_paused is False
 
-    def test_client_window_has_no_host_server_page_and_no_offer_modal(self, qapp):
+    def test_client_window_has_no_host_server_page_and_no_offer_modal(self, qapp, tmp_path):
         from collab.gui.client_window import ClientMainWindow
         from collab.gui.controllers.client_controller import ClientController
 
-        ctrl = ClientController()
+        ctrl = ClientController(auto_accept=False)
         win = ClientMainWindow(ctrl)
 
         assert "LumiChat" in win.windowTitle()
         assert not hasattr(win, "host_view")
         assert win.current_page() == "connect"
-        assert ctrl.file_receiver.auto_accept is True
+        assert ctrl.file_receiver.auto_accept is False
 
         # Exercise ClientMainWindow signal flows (connect, auth, directory, history, offline notice, transfers, disconnect)
         win._begin_connect("127.0.0.1", 37021, "/no/such/ca.crt", "downloads")
@@ -162,8 +162,10 @@ class TestSeparateServerAndClientWindows:
         assert not win.auth_view._error_label.isHidden()
 
         ctrl.username = "alice"
+        win._download_root = tmp_path / "downloads"
         ctrl.auth_succeeded.emit("alice")
         assert win.current_page() == "chat"
+        assert ctrl.file_receiver.download_dir == tmp_path / "downloads" / "alice"
 
         ctrl.directory_updated.emit(
             [
@@ -211,7 +213,7 @@ class TestOnlineOfflineTablesAndConversationHistory:
             ]
         )
 
-        assert w.online_usernames() == ["bob"]
+        assert w.online_usernames() == ["alice", "bob"]
         assert w.offline_usernames() == ["carol", "dave"]
 
         # Select offline user carol -> allowed for messaging!
@@ -264,6 +266,27 @@ class TestOnlineOfflineTablesAndConversationHistory:
         # Switch to online user bob -> sees Bob's 1-1 message
         v._users.select_user("bob")
         assert v.message_count() == 1
+
+    def test_chat_view_broadcast_file_targets_online_users(self, qapp, monkeypatch):
+        from collab.gui.views import chat_view
+        from collab.gui.views.chat_view import ChatView
+
+        view = ChatView()
+        view.set_connection_info("127.0.0.1", 37021, "alice")
+        view.set_directory(
+            [
+                {"username": "alice", "online": True, "host": "127.0.0.1", "port": 1},
+                {"username": "bob", "online": True, "host": "127.0.0.1", "port": 2},
+                {"username": "carol", "online": False, "host": None, "port": None},
+            ]
+        )
+        sent = []
+        view.file_send_requested.connect(lambda path, recipients: sent.append((path, recipients)))
+        monkeypatch.setattr(chat_view.QFileDialog, "getOpenFileName", lambda *_args: ("report.pdf", ""))
+
+        view._on_file()
+
+        assert sent == [("report.pdf", ["bob"])]
 
 
 class TestEndToEndOfflineChatHistoryAutoFileAndChunkTrace:

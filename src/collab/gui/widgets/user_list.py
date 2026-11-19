@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from .formatting import sanitize
 
-BROADCAST_LABEL = "📢 Kênh chung (Tất cả mọi người)"
+BROADCAST_LABEL = "Kênh chung"
 _USER_ROLE = Qt.ItemDataRole.UserRole
 
 
@@ -65,12 +65,12 @@ class UserListWidget(QWidget):
         self._btn_broadcast.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_broadcast.clicked.connect(lambda: self.select_user(None))
 
-        self._online_header = QLabel("🟢 TRỰC TUYẾN (0)")
+        self._online_header = QLabel("Trực tuyến: 0")
         self._online_header.setStyleSheet("color: #059669; font-weight: 800; font-size: 12px; padding-top: 6px;")
         self._online_table = _make_user_table("Kết nối")
         self._online_table.itemSelectionChanged.connect(self._on_online_table_selected)
 
-        self._offline_header = QLabel("⚪ NGOẠI TUYẾN (0)")
+        self._offline_header = QLabel("Ngoại tuyến: 0")
         self._offline_header.setStyleSheet("color: #64748B; font-weight: 800; font-size: 12px; padding-top: 6px;")
         self._offline_table = _make_user_table("Trạng thái")
         self._offline_table.itemSelectionChanged.connect(self._on_offline_table_selected)
@@ -88,7 +88,7 @@ class UserListWidget(QWidget):
     def _apply_broadcast_style(self) -> None:
         active = self._selected is None
         unread = self._unread.get(None, 0)
-        suffix = f"  ({unread} mới)" if unread else ""
+        suffix = f"  • {unread} mới" if unread else ""
         self._btn_broadcast.setText(BROADCAST_LABEL + suffix)
         self._btn_broadcast.setChecked(active)
         if active:
@@ -227,11 +227,11 @@ class UserListWidget(QWidget):
             if not isinstance(raw, dict):
                 continue
             name = sanitize(raw.get("username"))
-            if not name or name == self._own:
+            if not name:
                 continue
             item = {
                 "username": name,
-                "online": bool(raw.get("online", True)),
+                "online": True if name == self._own else bool(raw.get("online", True)),
                 "host": raw.get("host"),
                 "port": raw.get("port"),
             }
@@ -249,8 +249,8 @@ class UserListWidget(QWidget):
         self._render_tables(preserve_selection=True, emit_change=self._selected != previous)
 
     def _render_tables(self, *, preserve_selection: bool, emit_change: bool) -> None:
-        self._online_header.setText(f"🟢 TRỰC TUYẾN ({len(self._online)})")
-        self._offline_header.setText(f"⚪ NGOẠI TUYẾN ({len(self._offline)})")
+        self._online_header.setText(f"Trực tuyến: {len(self._online)}")
+        self._offline_header.setText(f"Ngoại tuyến: {len(self._offline)}")
         self._logical_items = [_LogicalItem(BROADCAST_LABEL)]
 
         self._online_table.blockSignals(True)

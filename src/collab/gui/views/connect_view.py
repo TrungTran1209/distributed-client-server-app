@@ -1,4 +1,4 @@
-"""Join screen: Direct TLS address or UDP LAN discovery with vibrant Figma daylight card styling."""
+"""Connect screen for direct TLS and LAN discovery."""
 
 from __future__ import annotations
 
@@ -35,49 +35,36 @@ class ConnectView(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        # Header Hero Card
         hero_card = QFrame()
         hero_card.setObjectName("card")
         hero_card.setStyleSheet(
-            "QFrame#card { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #EEF2FF, stop:1 #FFFFFF); "
-            "border: 1px solid #E0E7FF; border-radius: 14px; padding: 12px; }"
+            "QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; }"
         )
         hero_lay = QVBoxLayout(hero_card)
-        hero_badge = QLabel("✨ LUMICHAT SECURE CLIENT")
-        hero_badge.setStyleSheet(
-            "color: #4F46E5; font-weight: 800; font-size: 11px; letter-spacing: 0.8px; background: transparent;"
-        )
-        hero_title = QLabel("Tham gia Mạng làm việc Phân tán")
-        hero_title.setStyleSheet("font-size: 20px; font-weight: 800; color: #0F172A; background: transparent;")
-        hero_desc = QLabel(
-            "Kết nối an toàn tới máy chủ cộng tác qua kênh mã hóa TCP + TLS 1.2/1.3 và dò tìm máy chủ tự động qua UDP."
-        )
-        hero_desc.setStyleSheet("color: #64748B; font-size: 13px; background: transparent;")
-        hero_desc.setWordWrap(True)
-        hero_lay.addWidget(hero_badge)
-        hero_lay.addWidget(hero_title)
-        hero_lay.addWidget(hero_desc)
+        title = QLabel("Kết nối máy chủ")
+        title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0F172A;")
+        hero_lay.addWidget(title)
 
         # Direct Tab
         self._host_edit = QLineEdit()
-        self._host_edit.setPlaceholderText("IP hoặc tên miền máy chủ, ví dụ: 127.0.0.1 hoặc 192.168.1.10")
+        self._host_edit.setPlaceholderText("Ví dụ: 127.0.0.1")
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
         self._port_spin.setValue(37021)
         self._ca_edit = QLineEdit()
-        self._ca_edit.setPlaceholderText("Tùy chọn: tệp chứng chỉ CA/Server để xác minh TLS (certs/server.crt)")
+        self._ca_edit.setPlaceholderText("Ví dụ: certs/server.crt")
         self._download_edit = QLineEdit("downloads")
 
-        self._btn_connect = QPushButton("Kết nối tới Máy chủ ➤")
+        self._btn_connect = QPushButton("Kết nối")
         self._btn_connect.setObjectName("primary")
         self._btn_connect.clicked.connect(self._on_connect)
 
         form = QFormLayout()
         form.setSpacing(12)
-        form.addRow("Địa chỉ Máy chủ", self._host_edit)
-        form.addRow("Cổng TCP/TLS", self._port_spin)
-        form.addRow("Chứng chỉ CA (SAN)", self._pick_row(self._ca_edit, False))
-        form.addRow("Thư mục Lưu tệp nhận", self._pick_row(self._download_edit, True))
+        form.addRow("Máy chủ", self._host_edit)
+        form.addRow("Cổng", self._port_spin)
+        form.addRow("Chứng chỉ CA", self._pick_row(self._ca_edit, False))
+        form.addRow("Thư mục tải xuống", self._pick_row(self._download_edit, True))
 
         direct = QWidget()
         direct_lay = QVBoxLayout(direct)
@@ -91,25 +78,18 @@ class ConnectView(QWidget):
         self._udp_spin = QSpinBox()
         self._udp_spin.setRange(1, 65535)
         self._udp_spin.setValue(37020)
-        self._broadcast_check = QCheckBox("Dùng LAN Broadcast (quét toàn bộ mạng cục bộ)")
-        self._btn_discover = QPushButton("🔍 Khám phá Server qua UDP")
+        self._broadcast_check = QCheckBox("Quét toàn mạng LAN")
+        self._btn_discover = QPushButton("Tìm máy chủ")
         self._btn_discover.clicked.connect(lambda: self.discover_requested.emit(self._udp_spin.value()))
 
         self._discovery_list = QListWidget()
         self._discovery_list.itemDoubleClicked.connect(lambda _item: self._connect_selected())
-        self._btn_connect_selected = QPushButton("Kết nối tới Server đã chọn ➤")
+        self._btn_connect_selected = QPushButton("Kết nối")
         self._btn_connect_selected.setObjectName("primary")
         self._btn_connect_selected.clicked.connect(self._connect_selected)
 
-        explain = QLabel(
-            "🔒 Giao thức UDP Discovery chỉ hỗ trợ dò tìm địa chỉ máy chủ trong mạng. Sau khi tìm thấy, "
-            "ứng dụng sẽ thiết lập kênh TLS bảo mật và kiểm tra chữ ký số chứng chỉ máy chủ."
-        )
-        explain.setObjectName("hint")
-        explain.setWordWrap(True)
-
         row = QHBoxLayout()
-        row.addWidget(QLabel("Cổng UDP Discovery:"))
+        row.addWidget(QLabel("Cổng UDP"))
         row.addWidget(self._udp_spin)
         row.addWidget(self._btn_discover)
         row.addStretch()
@@ -121,12 +101,11 @@ class ConnectView(QWidget):
         lan_lay.addLayout(row)
         lan_lay.addWidget(self._broadcast_check)
         lan_lay.addWidget(self._discovery_list, 1)
-        lan_lay.addWidget(explain)
         lan_lay.addWidget(self._btn_connect_selected)
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(direct, "🌐 Kết nối Trực tiếp (Direct TLS)")
-        self._tabs.addTab(lan, "📡 Dò tìm Mạng LAN (UDP Discovery)")
+        self._tabs.addTab(direct, "Trực tiếp")
+        self._tabs.addTab(lan, "Tìm trong LAN")
 
         self._error_label = QLabel("")
         self._error_label.setObjectName("error")
@@ -195,7 +174,7 @@ class ConnectView(QWidget):
     def add_discovered_server(self, info: dict) -> None:
         host, port = _clean(info.get("host", "")), int(info.get("tcp_port", 37021))
         name = _clean(info.get("server_name", "collab"))
-        item = QListWidgetItem(f"🛰️ {name} — {host}:{port}")
+        item = QListWidgetItem(f"{name} — {host}:{port}")
         item.setData(_SERVER_ROLE, {"host": host, "tcp_port": port})
         self._discovery_list.addItem(item)
         self._discovery_list.setCurrentItem(item)
@@ -205,7 +184,7 @@ class ConnectView(QWidget):
 
     def set_discovering(self, active: bool) -> None:
         self._btn_discover.setEnabled(not active)
-        self._btn_discover.setText("Đang dò tìm…" if active else "Khám phá Server qua UDP")
+        self._btn_discover.setText("Đang tìm…" if active else "Tìm máy chủ")
 
     def broadcast_enabled(self) -> bool:
         return self._broadcast_check.isChecked()
@@ -213,7 +192,7 @@ class ConnectView(QWidget):
     def set_connecting(self, active: bool) -> None:
         self._btn_connect.setEnabled(not active)
         self._btn_connect_selected.setEnabled(not active)
-        self._btn_connect.setText("Đang kết nối…" if active else "Kết nối tới Máy chủ ➤")
+        self._btn_connect.setText("Đang kết nối…" if active else "Kết nối")
 
     def prefill(self, host: str, port: int, ca: str = "") -> None:
         self._host_edit.setText(host)

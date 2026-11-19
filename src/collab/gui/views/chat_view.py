@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..widgets.formatting import sanitize
-from ..widgets.message_bubble import MessageBubble
+from ..widgets.message_bubble import FileMessageBubble, MessageBubble
 from ..widgets.user_list import UserListWidget
 
 MAX_CHAT_LENGTH = 4000
@@ -41,6 +41,7 @@ class _Composer(QPlainTextEdit):
 class ChatView(QWidget):
     send_requested = Signal(str, object)
     file_send_requested = Signal(str, object)
+    file_download_requested = Signal(str)
     logout_requested = Signal()
     transfers_panel_requested = Signal()
     reconnect_requested = Signal()
@@ -52,11 +53,12 @@ class ChatView(QWidget):
         self._count = 0
         self._conversations: dict[str | None, list[dict]] = defaultdict(list)
         self._seen_ids: set[str] = set()
+        self._file_bubbles: dict[str, FileMessageBubble] = {}
 
         # Top bar
         top_card = QFrame()
         top_card.setObjectName("card")
-        self._brand_label = QLabel("✨ LumiChat")
+        self._brand_label = QLabel("LumiChat")
         self._brand_label.setStyleSheet("font-size: 17px; font-weight: 800; color: #4F46E5;")
         self._server_label = QLabel("")
         self._server_label.setStyleSheet("color: #64748B; font-weight: 600;")
@@ -65,7 +67,7 @@ class ChatView(QWidget):
             "font-weight: 700; color: #0284C7; background: #E0F2FE; "
             "border-radius: 8px; padding: 4px 10px;"
         )
-        self._btn_transfers = QPushButton("📦 Tiến độ Tệp")
+        self._btn_transfers = QPushButton("Tệp")
         self._btn_transfers.clicked.connect(self.transfers_panel_requested)
         self._btn_logout = QPushButton("Đăng xuất")
         self._btn_logout.clicked.connect(self.logout_requested)
@@ -96,7 +98,7 @@ class ChatView(QWidget):
         # Left sidebar: Online & Offline User Tables
         self._users = UserListWidget()
         self._users.setMinimumWidth(260)
-        users_title = QLabel("DANH BẠ NGƯỜI DÙNG")
+        users_title = QLabel("Người dùng")
         users_title.setStyleSheet("font-weight: 800; color: #4F46E5; font-size: 12px;")
         self._online_label = QLabel("0 trực tuyến · 0 ngoại tuyến")
         self._online_label.setObjectName("hint")
@@ -111,7 +113,7 @@ class ChatView(QWidget):
         # Right conversation area
         conv_header = QFrame()
         conv_header.setObjectName("card")
-        self._conv_title = QLabel("📢 Kênh chung (Broadcast)")
+        self._conv_title = QLabel("Kênh chung")
         self._conv_title.setStyleSheet("font-size: 15px; font-weight: 800; color: #0F172A;")
         self._conv_badge = QLabel("Mọi thành viên")
         self._conv_badge.setStyleSheet(
@@ -124,7 +126,7 @@ class ChatView(QWidget):
         conv_head_lay.addWidget(self._conv_badge)
 
         self._notice = QLabel(
-            "Lịch sử tin nhắn được lưu giữ tự động trên máy chủ — nhắn tin cho cả người đang trực tuyến và ngoại tuyến."
+            "Lịch sử tin nhắn được lưu giữ tự động trên máy chủ."
         )
         self._notice.setObjectName("hint")
         self._notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -145,10 +147,10 @@ class ChatView(QWidget):
         self._input.textChanged.connect(self._update_counter)
         self._counter = QLabel(f"0/{MAX_CHAT_LENGTH}")
         self._counter.setObjectName("hint")
-        self._btn_send = QPushButton("Gửi tin ➤")
+        self._btn_send = QPushButton("Gửi")
         self._btn_send.setObjectName("primary")
         self._btn_send.clicked.connect(self._on_send)
-        self._btn_file = QPushButton("📎 Gửi tệp nhanh")
+        self._btn_file = QPushButton("Gửi tệp")
         self._btn_file.setObjectName("accent_coral")
         self._btn_file.clicked.connect(self._on_file)
 
@@ -208,7 +210,7 @@ class ChatView(QWidget):
         self._username = username
         self._users.set_own_username(username)
         self._server_label.setText(f"Kết nối: {sanitize(host)}:{port}")
-        self._user_label.setText(f"👤 {sanitize(username)}")
+        self._user_label.setText(sanitize(username))
 
     def set_users(self, users: list[dict]) -> None:
         self._users.set_users(users)
@@ -221,7 +223,7 @@ class ChatView(QWidget):
     def _refresh_counts_and_header(self) -> None:
         n_on = len(self._users.online_usernames())
         n_off = len(self._users.offline_usernames())
-        self._online_label.setText(f"{n_on} trực tuyến · {n_off} ngoại tuyến (ngoài bạn)")
+        self._online_label.setText(f"{n_on} trực tuyến · {n_off} ngoại tuyến")
         self._update_conversation_header(self._users.get_selected_recipient())
 
     def show_disconnected_banner(self, reason: str) -> None:
@@ -258,7 +260,13 @@ class ChatView(QWidget):
     def clear_messages(self) -> None:
         self._conversations.clear()
         self._seen_ids.clear()
+        self._file_bubbles.clear()
         self._clear_rendered_bubbles()
+
+    def mark_file_done(self, transfer_id: str) -> None:
+        bubble = self._file_bubbles.get(transfer_id)
+        if bubble is not None:
+            bubble.mark_done()
 
     def _clear_rendered_bubbles(self) -> None:
         while self._messages.count():
@@ -315,12 +323,62 @@ class ChatView(QWidget):
         else:
             self._users.increment_unread(key)
 
+    def add_file_message(
+        self,
+        transfer_id: str,
+        filename: str,
+        size: int,
+        peer: str,
+        *,
+        is_own: bool,
+        recipient: str | None = None,
+    ) -> None:
+        if is_own:
+            key = recipient
+            sender = self._username
+        else:
+            key = peer
+            sender = peer
+        mid = f"file:{transfer_id}"
+        if mid in self._seen_ids:
+            return
+        self._seen_ids.add(mid)
+        message = {
+            "kind": "file",
+            "message_id": mid,
+            "transfer_id": transfer_id,
+            "filename": filename,
+            "size": size,
+            "from": sender,
+            "to": recipient,
+            "is_own": is_own,
+            "sent_at": datetime.datetime.now().strftime("%H:%M"),
+        }
+        self._conversations[key].append(message)
+        if key == self._users.get_selected_recipient():
+            self._append_bubble(message)
+
     def _render_conversation(self, key: str | None) -> None:
         self._clear_rendered_bubbles()
         for msg in self._conversations.get(key, []):
             self._append_bubble(msg)
 
     def _append_bubble(self, message: dict) -> None:
+        if message.get("kind") == "file":
+            bubble = FileMessageBubble(
+                str(message.get("transfer_id", "")),
+                str(message.get("filename", "Tệp")),
+                int(message.get("size", 0)),
+                str(message.get("from") or message.get("sender") or ""),
+                self._format_stamp(message.get("sent_at")),
+                is_own=bool(message.get("is_own")),
+            )
+            bubble.download_requested.connect(self.file_download_requested.emit)
+            self._messages.addWidget(bubble)
+            if message.get("transfer_id"):
+                self._file_bubbles[str(message["transfer_id"])] = bubble
+            self._count += 1
+            return
         sender = sanitize(message.get("from") or self._username)
         recipient = message.get("to")
         is_own = bool(self._username and sender == self._username)
@@ -345,23 +403,23 @@ class ChatView(QWidget):
     # ----------------------------------------------------------- handlers
     def _update_conversation_header(self, recipient: str | None) -> None:
         if recipient is None:
-            self._conv_title.setText("📢 Kênh chung (Tất cả mọi người)")
-            self._conv_badge.setText("Kênh chung · Lưu lịch sử")
+            self._conv_title.setText("Kênh chung")
+            self._conv_badge.setText("Lưu lịch sử")
             self._conv_badge.setStyleSheet(
                 "color: #4338CA; background: #EEF2FF; border-radius: 8px; padding: 3px 10px; font-weight: 700;"
             )
-            self._target_label.setText("Đang nhắn tới: tất cả mọi người (Broadcast)")
+            self._target_label.setText("Đang nhắn tới mọi người")
         else:
             online = self._users.is_user_online(recipient)
-            self._conv_title.setText(f"💬 Hội thoại với {sanitize(recipient)}")
+            self._conv_title.setText(f"Hội thoại với {sanitize(recipient)}")
             if online:
                 self._conv_badge.setText("● Đang trực tuyến")
                 self._conv_badge.setStyleSheet(
                     "color: #047857; background: #DCFCE7; border-radius: 8px; padding: 3px 10px; font-weight: 700;"
                 )
-                self._target_label.setText(f"Tin nhắn riêng & gửi tệp tới: {sanitize(recipient)}")
+                self._target_label.setText(f"Nhắn riêng tới: {sanitize(recipient)}")
             else:
-                self._conv_badge.setText("○ Ngoại tuyến · Vẫn nhận & lưu tin nhắn")
+                self._conv_badge.setText("○ Ngoại tuyến")
                 self._conv_badge.setStyleSheet(
                     "color: #475569; background: #F1F5F9; border-radius: 8px; padding: 3px 10px; font-weight: 700;"
                 )
@@ -397,13 +455,22 @@ class ChatView(QWidget):
     def _on_file(self) -> None:
         recipient = self._users.get_selected_recipient()
         if recipient is None:
-            self.show_error(
-                "Hãy chọn một người dùng cụ thể ở bảng Trực tuyến bên trái để gửi tệp (không gửi broadcast)."
-            )
+            recipients = [
+                name
+                for name in self._users.online_usernames()
+                if name != self._username
+            ]
+            if not recipients:
+                self.show_error("Không có người dùng nào đang trực tuyến.")
+                return
+            path, _ = QFileDialog.getOpenFileName(self, "Chọn tệp gửi cho nhóm")
+            if path:
+                self.clear_error()
+                self.file_send_requested.emit(path, recipients)
             return
         if not self._users.is_user_online(recipient):
             self.show_error(
-                f"{sanitize(recipient)} hiện đang ngoại tuyến — bạn vẫn nhắn tin được, nhưng gửi tệp chia chunk cần người nhận đang trực tuyến."
+                f"{sanitize(recipient)} hiện đang ngoại tuyến."
             )
             return
         path, _ = QFileDialog.getOpenFileName(self, f"Chọn tệp gửi ngay cho {recipient}")

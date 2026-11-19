@@ -23,7 +23,6 @@ from .views.connect_view import ConnectView
 from .views.home_view import HomeView
 from .views.host_view import HostView
 from .widgets.formatting import describe_transfer_error
-from .widgets.transfer_dialog import TransferOfferDialog
 from .widgets.transfer_manager import TransferManagerWidget
 
 _PAGES = ("home", "host", "connect", "auth", "chat")
@@ -36,7 +35,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Collab — Trò chuyện & gửi tệp")
         self.setMinimumSize(1024, 680)
         self._endpoint: tuple[str, int, str, str] | None = None  # host, port, ca, download dir
-        self._offers: dict[str, TransferOfferDialog] = {}
+        self._offers: dict[str, dict] = {}
         self._offer_senders: dict[str, str] = {}
         self._register_user = ""
 
@@ -48,7 +47,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stack)
 
         self.transfer_manager = TransferManagerWidget()
-        self._dock = QDockWidget("Trung tâm truyền tệp", self)
+        self._dock = QDockWidget("Lịch sử tệp", self)
         self._dock.setWidget(self.transfer_manager)
         self._dock.setMinimumWidth(340)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._dock)
@@ -106,6 +105,9 @@ class MainWindow(QMainWindow):
         self.chat_view.transfers_panel_requested.connect(self._toggle_dock)
         self.chat_view.reconnect_requested.connect(self._reconnect)
         self.transfer_manager.cancel_requested.connect(self._confirm_cancel)
+        self.transfer_manager.download_requested.connect(self.client_ctrl.accept_file)
+        self.chat_view.file_download_requested.connect(self.client_ctrl.accept_file)
+        self.chat_view._users.recipient_changed.connect(self.transfer_manager.set_conversation)
 
     def _wire_server(self) -> None:
         s = self.server_ctrl
@@ -292,27 +294,41 @@ class MainWindow(QMainWindow):
 
     def _on_offer(self, offer: dict) -> None:
         tid = str(offer.get("transfer_id"))
-        dialog = TransferOfferDialog(offer, self)
-        self._offers[tid] = dialog
+        self._offers[tid] = dict(offer)
         self._offer_senders[tid] = str(offer.get("from", ""))
-        dialog.accepted_transfer.connect(self.client_ctrl.accept_file)
-        dialog.rejected_transfer.connect(self.client_ctrl.reject_file)
-        dialog.finished.connect(lambda _r, t=tid: self._offers.pop(t, None))
-        dialog.show()
+        self.transfer_manager.add_incoming_offer(
+            tid,
+            str(offer.get("filename", "")),
+            str(offer.get("from", "")),
+        )
+        self.chat_view.add_file_message(
+            tid,
+            str(offer.get("filename", "")),
+            int(offer.get("size", 0)),
+            str(offer.get("from", "")),
+            is_own=False,
+        )
 
     def _on_transfer_started(self, info: dict) -> None:
         tid, name = info["transfer_id"], info["filename"]
         if info["direction"] == "send":
             self.transfer_manager.add_outgoing(tid, name, info["peer"])
+            self.chat_view.add_file_message(
+                tid,
+                name,
+                int(info.get("size", 0)),
+                info["peer"],
+                is_own=True,
+                recipient=info["peer"],
+            )
         else:
             self.transfer_manager.add_incoming(tid, name, info["peer"] or self._offer_senders.get(tid, ""))
-        self._dock.show()
 
     def _on_transfer_done(self, tid: str, ok: bool, detail: dict) -> None:
-        dialog = self._offers.pop(tid, None)
-        if dialog is not None:  # offer withdrawn/expired before the user answered
-            dialog.set_expired()
+        self._offers.pop(tid, None)
         self.transfer_manager.set_transfer_done(tid, ok, detail)
+        if ok:
+            self.chat_view.mark_file_done(tid)
         text = "Truyền tệp hoàn tất" if ok else "Truyền tệp thất bại: " + describe_transfer_error(
             detail.get("code") or detail.get("message"))
         self.statusBar().showMessage(text, 8000)

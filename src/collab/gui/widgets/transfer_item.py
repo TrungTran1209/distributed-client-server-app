@@ -13,10 +13,21 @@ from .formatting import describe_transfer_error, human_size, sanitize
 
 class TransferItemWidget(QWidget):
     cancel_requested = Signal(str)
+    download_requested = Signal(str)
 
-    def __init__(self, transfer_id: str, filename: str, peer: str, direction: str, parent=None) -> None:
+    def __init__(
+        self,
+        transfer_id: str,
+        filename: str,
+        peer: str,
+        direction: str,
+        parent=None,
+        *,
+        pending: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.transfer_id, self.direction = transfer_id, direction
+        self._pending = pending
         self._finished = False
         self._path: str | None = None
 
@@ -26,9 +37,9 @@ class TransferItemWidget(QWidget):
             "QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 6px; }"
         )
 
-        icon = "📤" if direction == "send" else "📥"
+        icon = "Gửi" if direction == "send" else "Nhận"
         arrow = "Gửi tới" if direction == "send" else "Nhận từ"
-        self._title = QLabel(f"{icon} {sanitize(filename)}   ·   {arrow} {sanitize(peer) or '…'}")
+        self._title = QLabel(f"{icon}: {sanitize(filename)}   ·   {arrow} {sanitize(peer) or '…'}")
         self._title.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 13px;")
 
         self._bar = QProgressBar()
@@ -38,7 +49,9 @@ class TransferItemWidget(QWidget):
         self._bytes = QLabel("")
         self._bytes.setObjectName("hint")
         self._status = QLabel(
-            "Đang chờ người nhận chấp nhận…" if direction == "send" else "Đang chờ bắt đầu nhận…"
+            "Đang chờ người nhận tải xuống…"
+            if direction == "send"
+            else "Có tệp mới"
         )
         self._status.setStyleSheet("color: #475569; font-size: 11px;")
 
@@ -49,6 +62,12 @@ class TransferItemWidget(QWidget):
             "QPushButton:hover { background: #FCA5A5; }"
         )
         self._btn_cancel.clicked.connect(lambda: self.cancel_requested.emit(self.transfer_id))
+
+        self._btn_download = QPushButton("Tải xuống")
+        self._btn_download.clicked.connect(
+            lambda: self.download_requested.emit(self.transfer_id)
+        )
+        self._btn_download.setVisible(direction == "receive" and pending)
 
         self._btn_open = QPushButton("Mở thư mục")
         self._btn_open.setStyleSheet(
@@ -62,8 +81,11 @@ class TransferItemWidget(QWidget):
         foot = QHBoxLayout()
         foot.addWidget(self._status, 1)
         foot.addWidget(self._bytes)
+        foot.addWidget(self._btn_download)
         foot.addWidget(self._btn_open)
         foot.addWidget(self._btn_cancel)
+        if direction == "receive" and pending:
+            self._btn_cancel.hide()
 
         card_lay = QVBoxLayout(card)
         card_lay.setContentsMargins(10, 8, 10, 8)
@@ -95,12 +117,18 @@ class TransferItemWidget(QWidget):
         self._status.setText(text)
         self._status.setStyleSheet("color: #DC2626; font-weight: 700;" if error else "color: #475569;")
 
+    def mark_started(self) -> None:
+        self._pending = False
+        self._btn_download.hide()
+        self._btn_cancel.show()
+        self.set_status("Đang tải xuống…")
+
     def set_done(self, ok: bool, path: str | None = None, code: str | None = None) -> None:
         self._finished = True
         self._btn_cancel.hide()
         if ok:
             self._bar.setValue(100)
-            self.set_status("Hoàn tất — đã xác minh SHA-256" + (f"\n{path}" if path else ""))
+            self.set_status("Đã hoàn tất")
             self._status.setStyleSheet("color: #059669; font-weight: 700;")
             if path:
                 self._path = path

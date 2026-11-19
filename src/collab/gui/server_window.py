@@ -91,7 +91,7 @@ class ServerMainWindow(QMainWindow):
     def __init__(self, server_ctrl: ServerController) -> None:
         super().__init__()
         self.server_ctrl = server_ctrl
-        self.setWindowTitle(f"{APP_BRAND} Server Console — Quản trị & TLS Application Inspector")
+        self.setWindowTitle(f"{APP_BRAND} Server")
         self.setMinimumSize(1200, 780)
 
         self._directory: list[dict] = []
@@ -105,21 +105,15 @@ class ServerMainWindow(QMainWindow):
         # ------------------------------------------------ Top KPI Banner
         top_row = QHBoxLayout()
         brand_box = QVBoxLayout()
-        title = QLabel(f"🛰️ {APP_BRAND} Server Console")
+        title = QLabel(f"{APP_BRAND} Server")
         title.setObjectName("title")
-        subtitle = QLabel(
-            "Khởi tạo máy chủ TLS & theo dõi metadata giao thức thời gian thực "
-            "(chat, phiên, file và từng chunk; không lưu payload riêng tư)"
-        )
-        subtitle.setObjectName("subtitle")
         brand_box.addWidget(title)
-        brand_box.addWidget(subtitle)
         top_row.addLayout(brand_box, 2)
 
-        kpi_status_card, self._kpi_status = _kpi_card("TRẠNG THÁI SERVER", "Đang dừng", "#64748B")
-        kpi_users_card, self._kpi_users = _kpi_card("NGƯỜI DÙNG BẢO MẬT", "0 Online · 0 Offline", "#10B981")
-        kpi_chunks_card, self._kpi_chunks = _kpi_card("GÓI CHUNK SNIFFER", "0 chunks", "#F97316")
-        kpi_msgs_card, self._kpi_msgs = _kpi_card("TIN NHẮN LƯU TRỮ", "0 tin", "#4F46E5")
+        kpi_status_card, self._kpi_status = _kpi_card("TRẠNG THÁI", "Đang dừng", "#64748B")
+        kpi_users_card, self._kpi_users = _kpi_card("NGƯỜI DÙNG", "0 Online · 0 Offline", "#10B981")
+        kpi_chunks_card, self._kpi_chunks = _kpi_card("CHUNK", "0", "#F97316")
+        kpi_msgs_card, self._kpi_msgs = _kpi_card("TIN NHẮN", "0", "#4F46E5")
         for card in (kpi_status_card, kpi_users_card, kpi_chunks_card, kpi_msgs_card):
             top_row.addWidget(card, 1)
 
@@ -146,7 +140,7 @@ class ServerMainWindow(QMainWindow):
         form.addRow("Idle timeout (s)", self._idle_spin)
         form.addRow("Auth timeout (s)", self._auth_spin)
 
-        cfg_box = QGroupBox("Khởi tạo & Cấu hình Máy chủ")
+        cfg_box = QGroupBox("Cấu hình")
         cfg_lay = QVBoxLayout(cfg_box)
         cfg_lay.addLayout(form)
 
@@ -156,12 +150,12 @@ class ServerMainWindow(QMainWindow):
         self._error_label.hide()
         cfg_lay.addWidget(self._error_label)
 
-        self._btn_certgen = QPushButton("🔐 Tạo chứng chỉ TLS (SAN)…")
+        self._btn_certgen = QPushButton("Tạo chứng chỉ TLS…")
         self._btn_certgen.clicked.connect(self._open_certgen)
-        self._btn_start = QPushButton("▶ Khởi chạy Server")
+        self._btn_start = QPushButton("Khởi động")
         self._btn_start.setObjectName("primary")
         self._btn_start.clicked.connect(self._on_start)
-        self._btn_stop = QPushButton("⏹ Dừng Server")
+        self._btn_stop = QPushButton("Dừng")
         self._btn_stop.setObjectName("danger")
         self._btn_stop.setEnabled(False)
         self._btn_stop.clicked.connect(self._on_stop)
@@ -172,7 +166,7 @@ class ServerMainWindow(QMainWindow):
         cfg_lay.addWidget(self._btn_certgen)
         cfg_lay.addLayout(btn_row)
 
-        users_box = QGroupBox("Danh bạ Người dùng (Trực tuyến & Ngoại tuyến)")
+        users_box = QGroupBox("Người dùng")
         self._users_table = QTableWidget(0, 3)
         self._users_table.setHorizontalHeaderLabels(["Tài khoản", "Trạng thái", "Địa chỉ kết nối"])
         self._users_table.verticalHeader().setVisible(False)
@@ -198,21 +192,19 @@ class ServerMainWindow(QMainWindow):
         left_lay.addWidget(self._log_edit)
 
         # ------------------------------------------------ Right Column: TLS Application Inspector
-        sniffer_box = QGroupBox(
-            "🛡 TLS Application Inspector (metadata giao thức & từng chunk)"
-        )
+        sniffer_box = QGroupBox("Hoạt động")
         sniffer_lay = QVBoxLayout(sniffer_box)
         sniffer_lay.setSpacing(8)
 
         # 1. Wireshark Toolbar & Filter Bar
         ws_tools = QHBoxLayout()
-        self._btn_pause = QPushButton("⏸ Tạm dừng")
+        self._btn_pause = QPushButton("Tạm dừng")
         self._btn_pause.clicked.connect(self._toggle_pause_capture)
-        self._btn_clear = QPushButton("🧹 Xóa bảng")
+        self._btn_clear = QPushButton("Xóa")
         self._btn_clear.clicked.connect(self.clear_traces)
-        self._btn_export = QPushButton("⬇ Xuất CSV")
+        self._btn_export = QPushButton("CSV")
         self._btn_export.clicked.connect(self._export_csv)
-        self._btn_export_json = QPushButton("⬇ Xuất JSON")
+        self._btn_export_json = QPushButton("JSON")
         self._btn_export_json.clicked.connect(self._export_json)
 
         ws_tools.addWidget(self._btn_pause)

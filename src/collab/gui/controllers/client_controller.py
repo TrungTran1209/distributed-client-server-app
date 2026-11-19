@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 
 from collab.client.connection import ClientConnectionError
 from collab.common.errors import TransferError
+from collab.common.protocol import normalize_username
 from collab.transfer import FileReceiver, FileSender
 
 from ..workers.async_workers import (
@@ -89,6 +90,13 @@ class ClientController(QObject):
 
     def get_directory(self) -> list[dict]:
         return list(self._directory)
+
+    def set_download_directory_for_user(self, username: str, root: str | Path) -> Path:
+        """Store received files below ``root/<username>`` after authentication."""
+        user_dir = Path(root).expanduser() / normalize_username(username)
+        user_dir.mkdir(parents=True, exist_ok=True)
+        self.file_receiver.download_dir = user_dir
+        return user_dir
 
     # --------------------------------------------------------- connection
     def _request(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -234,17 +242,6 @@ class ClientController(QObject):
             "total_chunks": manifest.total_chunks,
         }
         self.transfer_offer.emit(offer_dict)
-        if self.file_receiver.auto_accept:
-            self.transfer_started.emit(
-                {
-                    "direction": "receive",
-                    "transfer_id": manifest.transfer_id,
-                    "filename": manifest.filename,
-                    "size": manifest.size,
-                    "total_chunks": manifest.total_chunks,
-                    "peer": sender,
-                }
-            )
 
     # --------------------------------------------------------------- auth
     def login(self, username: str, password: str) -> None:
@@ -320,7 +317,14 @@ class ClientController(QObject):
         else:
             self.chat_failed.emit(describe_error(resp))
 
-    def send_file(self, path: str, recipient: str) -> None:
+    def send_file(self, path: str, recipient: str | list[str]) -> None:
+        if isinstance(recipient, list):
+            for target in recipient:
+                self._send_file_to(path, target)
+            return
+        self._send_file_to(path, recipient)
+
+    def _send_file_to(self, path: str, recipient: str) -> None:
         worker = FileSendWorker(self.file_sender, path, recipient)
         worker.signals.result.connect(
             lambda m: self.transfer_started.emit(

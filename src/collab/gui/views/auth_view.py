@@ -1,4 +1,4 @@
-"""Login / registration screen with vibrant modern Figma daylight card styling."""
+"""Login and registration screen."""
 
 from __future__ import annotations
 
@@ -41,27 +41,16 @@ class AuthView(QWidget):
         card_lay.setContentsMargins(28, 26, 28, 26)
         card_lay.setSpacing(16)
 
-        # Header Badge & Title
-        auth_badge = QLabel("🔐 XÁC THỰC MÃ HÓA SCRYPT + SALT")
-        auth_badge.setStyleSheet(
-            "color: #4F46E5; font-weight: 800; font-size: 11px; letter-spacing: 0.8px; background: transparent;"
-        )
-        auth_title = QLabel("Đăng nhập hoặc Tạo tài khoản")
-        auth_title.setStyleSheet("font-size: 20px; font-weight: 800; color: #0F172A; background: transparent;")
-        auth_sub = QLabel("Mật khẩu được dẫn xuất bằng scrypt với salt 16-byte ngẫu nhiên và so sánh thời gian hằng số.")
-        auth_sub.setStyleSheet("color: #64748B; font-size: 12px; background: transparent;")
-        auth_sub.setWordWrap(True)
-
-        card_lay.addWidget(auth_badge)
+        auth_title = QLabel("Tài khoản")
+        auth_title.setStyleSheet("font-size: 20px; font-weight: 700; color: #0F172A;")
         card_lay.addWidget(auth_title)
-        card_lay.addWidget(auth_sub)
 
         # Login Form Tab
         self._login_user_edit = QLineEdit()
         self._login_user_edit.setPlaceholderText("Nhập tên đăng nhập của bạn")
         self._login_pass_edit = _password()
         self._login_pass_edit.setPlaceholderText("Nhập mật khẩu an toàn")
-        self._btn_login = QPushButton("Đăng nhập An toàn ➤")
+        self._btn_login = QPushButton("Đăng nhập")
         self._btn_login.setObjectName("primary")
         self._btn_login.clicked.connect(self._on_login)
         self._login_pass_edit.returnPressed.connect(self._btn_login.click)
@@ -86,14 +75,13 @@ class AuthView(QWidget):
         self._reg_pass_edit.setPlaceholderText(f"Tối thiểu {self.MIN_PASSWORD} ký tự")
         self._reg_confirm_edit = _password()
         self._reg_confirm_edit.setPlaceholderText("Nhập lại chính xác mật khẩu")
-        self._btn_register = QPushButton("Tạo tài khoản Mới ➤")
+        self._btn_register = QPushButton("Tạo tài khoản")
         self._btn_register.setObjectName("primary")
         self._btn_register.clicked.connect(self._on_register)
         self._reg_confirm_edit.returnPressed.connect(self._btn_register.click)
 
         hint = QLabel(
-            f"ℹ️ Mật khẩu dài {self.MIN_PASSWORD}–{self.MAX_PASSWORD} ký tự. "
-            "Mật khẩu không bao giờ lưu trữ dạng thô và không hiển thị trên log máy chủ."
+            f"Mật khẩu dài {self.MIN_PASSWORD}–{self.MAX_PASSWORD} ký tự."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -114,8 +102,8 @@ class AuthView(QWidget):
         reg_lay.addStretch()
 
         self._tabs = QTabWidget()
-        self._tabs.addTab(login, "🔑 Đăng nhập")
-        self._tabs.addTab(register, "✨ Tạo tài khoản")
+        self._tabs.addTab(login, "Đăng nhập")
+        self._tabs.addTab(register, "Đăng ký")
 
         self._error_label = QLabel("")
         self._error_label.setObjectName("error")
@@ -129,7 +117,7 @@ class AuthView(QWidget):
         )
         self._info_label.hide()
 
-        self._btn_back = QPushButton("← Ngắt kết nối Máy chủ")
+        self._btn_back = QPushButton("Quay lại")
         self._btn_back.clicked.connect(self.back_requested)
 
         card_lay.addWidget(self._tabs)

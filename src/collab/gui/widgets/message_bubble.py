@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from .formatting import sanitize
 
@@ -91,15 +92,9 @@ class MessageBubble(QWidget):
         meta = QLabel(sanitize(timestamp))
         meta.setStyleSheet(f"color: {meta_color}; font-size: 11px; background: transparent; font-weight: 500;")
 
-        badge_text = "🔒 Riêng tư" + (f" → {sanitize(private_peer)}" if private_peer else "")
-        self._badge = QLabel(badge_text)
-        self._badge.setStyleSheet(badge_style)
-        self._badge.setVisible(bool(is_private))
-
         top = QHBoxLayout()
         top.setSpacing(8)
         top.addWidget(head)
-        top.addWidget(self._badge)
         top.addStretch()
         top.addWidget(meta)
 
@@ -129,4 +124,112 @@ class MessageBubble(QWidget):
         return self._body.textFormat()
 
     def is_private_badge_shown(self) -> bool:
-        return not self._badge.isHidden()
+        return False
+
+
+class FileMessageBubble(QWidget):
+    download_requested = Signal(str)
+
+    def __init__(
+        self,
+        transfer_id: str,
+        filename: str,
+        size: int,
+        sender: str,
+        timestamp: str,
+        is_own: bool,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.transfer_id = transfer_id
+        clean_sender = sanitize(sender) or "User"
+
+        card = QFrame()
+        card.setObjectName("card")
+        card.setMaximumWidth(520)
+        card.setStyleSheet(
+            "QFrame#card { background: #FFFFFF; border: 1px solid #E2E8F0; "
+            "border-radius: 10px; }"
+        )
+
+        ext = filename.rsplit(".", 1)[-1].upper()[:4] if "." in filename else "FILE"
+        icon = QLabel(ext)
+        icon.setFixedSize(44, 44)
+        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon.setStyleSheet(
+            "QLabel { background: #FF6B6B; color: #FFFFFF; border-radius: 7px; "
+            "font-size: 12px; font-weight: 800; }"
+        )
+
+        name = QLabel(sanitize(filename))
+        name.setStyleSheet("font-size: 14px; font-weight: 700; color: #0F172A;")
+        name.setTextFormat(Qt.TextFormat.PlainText)
+
+        self._status = QLabel(
+            f"{_format_file_size(size)}  ·  Đã gửi"
+            if is_own
+            else f"{_format_file_size(size)}  ·  Tải về để xem"
+        )
+        self._status.setStyleSheet("font-size: 11px; color: #64748B;")
+
+        meta = QLabel(f"{sanitize(timestamp)}")
+        meta.setStyleSheet("font-size: 10px; color: #94A3B8;")
+
+        download = QPushButton("↓")
+        download.setFixedSize(38, 38)
+        download.setToolTip("Tải xuống")
+        download.setStyleSheet(
+            "QPushButton { background: #FFFFFF; color: #334155; border: 1px solid #CBD5E1; "
+            "border-radius: 7px; font-size: 18px; }"
+            "QPushButton:hover { background: #EEF2FF; border-color: #4F46E5; color: #4F46E5; }"
+        )
+        download.clicked.connect(lambda: self.download_requested.emit(self.transfer_id))
+        download.clicked.connect(download.hide)
+        download.clicked.connect(lambda: self._status.setText(f"{_format_file_size(size)}  ·  Đang tải xuống"))
+        if is_own:
+            download.hide()
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        text_col.addWidget(name)
+        text_col.addWidget(self._status)
+        text_col.addWidget(meta)
+
+        inner = QHBoxLayout(card)
+        inner.setContentsMargins(10, 8, 10, 8)
+        inner.setSpacing(10)
+        inner.addWidget(icon)
+        inner.addLayout(text_col, 1)
+        inner.addWidget(download)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(6, 4, 6, 4)
+        row.setSpacing(8)
+        if is_own:
+            row.addStretch()
+            row.addWidget(card)
+        else:
+            row.addWidget(card)
+            row.addStretch()
+
+    def download_button(self) -> QPushButton:
+        return self.findChildren(QPushButton)[0]
+
+    def mark_done(self) -> None:
+        download = self.findChildren(QPushButton)
+        if download:
+            download[0].hide()
+        self._status.setText("Đã hoàn tất")
+
+
+def _format_file_size(size: int) -> str:
+    value = max(0, int(size))
+    units = ("B", "KB", "MB", "GB")
+    unit_index = 0
+    float_value = float(value)
+    while float_value >= 1024 and unit_index < len(units) - 1:
+        float_value /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{value} B"
+    return f"{float_value:.2f}".rstrip("0").rstrip(".") + f" {units[unit_index]}"

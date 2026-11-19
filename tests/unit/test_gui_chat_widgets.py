@@ -90,14 +90,14 @@ class TestUserList:
         w.set_users([USERS[0]])
         assert w.get_selected_recipient() is None
 
-    def test_own_username_excluded(self, qapp):
+    def test_own_username_is_included_when_online(self, qapp):
         from collab.gui.widgets.user_list import UserListWidget
 
         w = UserListWidget()
         w.set_own_username("alice")
         w.set_users(USERS)
-        assert w.count() == 3
-        assert "alice" not in w.usernames()
+        assert w.count() == 4
+        assert "alice" in w.usernames()
 
     def test_unknown_address_not_invented(self, qapp):
         from collab.gui.widgets.user_list import UserListWidget
@@ -128,7 +128,7 @@ class TestMessageBubble:
         from collab.gui.widgets.message_bubble import MessageBubble
 
         b = MessageBubble("s", "bob", "10:00", is_own=False, is_private=True)
-        assert b.is_private_badge_shown()
+        assert not b.is_private_badge_shown()
 
 
 class TestChatView:
@@ -210,13 +210,16 @@ class TestChatView:
         assert v._banner.isHidden()
         assert v._input.isEnabled()
 
-    def test_file_button_needs_selected_user(self, qapp, monkeypatch):
+    def test_file_button_broadcasts_to_online_users(self, qapp, monkeypatch):
         v = self._view(qapp)
         got = []
         v.file_send_requested.connect(lambda p, r: got.append((p, r)))
-        v._btn_file.click()  # broadcast selected -> must not open a picker or emit
-        assert got == []
-        assert not v._error_label.isHidden()
+        monkeypatch.setattr(
+            "collab.gui.views.chat_view.QFileDialog.getOpenFileName",
+            lambda *_args: ("report.pdf", ""),
+        )
+        v._btn_file.click()
+        assert got == [("report.pdf", ["bob", "carol"])]
 
     def test_persistent_history_notice_present(self, qapp):
         v = self._view(qapp)
@@ -231,6 +234,23 @@ class TestChatView:
 
 
 class TestTransferWidgets:
+    def test_file_message_bubble_download_action(self, qapp):
+        from collab.gui.widgets.message_bubble import FileMessageBubble
+
+        w = FileMessageBubble(
+            "offer-1",
+            "PLDC_Review.pdf",
+            53_460,
+            "alice",
+            "22:05",
+            is_own=False,
+        )
+        got = []
+        w.download_requested.connect(got.append)
+        w.download_button().click()
+
+        assert got == ["offer-1"]
+
     def test_item_progress_updates_bar_and_text(self, qapp):
         from collab.gui.widgets.transfer_item import TransferItemWidget
 
@@ -282,6 +302,19 @@ class TestTransferWidgets:
         m.cancel_requested.connect(got.append)
         m._items["t1"]._btn_cancel.click()
         assert got == ["t1"]
+
+    def test_incoming_offer_has_download_action(self, qapp):
+        from collab.gui.widgets.transfer_manager import TransferManagerWidget
+
+        m = TransferManagerWidget()
+        m.add_incoming_offer("offer-1", "report.pdf", "alice")
+        got = []
+        m.download_requested.connect(got.append)
+
+        m._items["offer-1"]._btn_download.click()
+
+        assert got == ["offer-1"]
+        assert not m._items["offer-1"]._btn_download.isHidden()
 
     def test_offer_dialog_accept_reject(self, qapp):
         from collab.gui.widgets.transfer_dialog import TransferOfferDialog
@@ -336,7 +369,7 @@ class TestMainWindowWiring:
         c.auth_succeeded.emit("alice")
         assert w.current_page() == "chat"
         c.users_updated.emit(USERS)
-        assert w.chat_view._users.count() == 3  # own user excluded
+        assert w.chat_view._users.count() == 4
         c.message_received.emit({"type": "chat_message", "from": "bob", "to": None, "text": "yo"})
         assert w.chat_view.message_count() == 1
         c.connection_lost.emit("boom")
